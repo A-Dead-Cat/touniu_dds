@@ -51,6 +51,15 @@ auto eligible(const State& state, const Trick& trick, const TrickPlay& play) -> 
     return play.action.effective_suit() == trick.front().action.effective_suit() ? 2 : 0;
 }
 
+auto effective_rank(const State& state, const Card& card) -> std::int32_t
+{
+    if (state.contract() == Contract::NoTrump &&
+        card.kind() == CardKind::ThreeSuitCat) {
+        return 999'999;
+    }
+    return card.rank().millionths();
+}
+
 }  // namespace
 
 auto resolve_trick(const State& state, const Trick& trick) -> TrickResult
@@ -63,7 +72,7 @@ auto resolve_trick(const State& state, const Trick& trick) -> TrickResult
         const TrickPlay& play = trick[index];
         const int card_class = eligible(state, trick, play);
         const Card* card = play.action.is_pass() ? nullptr : state.card(*play.action.card_id());
-        const std::int32_t rank = card == nullptr ? -1 : card->rank().millionths();
+        const std::int32_t rank = card == nullptr ? -1 : effective_rank(state, *card);
         if (card_class > best_class || (card_class == best_class && rank > best_rank)) {
             best = index;
             best_class = card_class;

@@ -104,5 +104,18 @@ TEST(TrickResolutionTest, FourPassesAwardTheTrickToTheFirstSeat)
     EXPECT_EQ(resolve_trick(state, trick).winner, Seat::West);
 }
 
+TEST(TrickResolutionTest, CatRankDowngradesToPointNineNineNineNineNineNineInNoTrump)
+{
+    const State state = state_with({
+        Card::three_suit_cat(CardId{1}), card(2, Suit::Spades, 1)});
+    const Trick trick{
+        {Seat::West, Action::play(CardId{1}, PlayMode::Lead, Suit::NoTrump)},
+        {Seat::North, Action::play(CardId{2}, PlayMode::Discard, Suit::Spades)},
+        {Seat::East, Action::pass()}, {Seat::South, Action::pass()},
+    };
+
+    EXPECT_EQ(resolve_trick(state, trick).winner, Seat::North);
+}
+
 }  // namespace
 }  // namespace touniu_solver
