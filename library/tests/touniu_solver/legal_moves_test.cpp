@@ -60,5 +60,39 @@ TEST(LegalMovesTest, ProducesOnlyTemporaryPassForEmptyHand)
     EXPECT_TRUE(actions.front().is_pass());
 }
 
+TEST(LegalMovesTest, FourSuitCardCannotLeadWhileAnOrdinaryCardRemains)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::South;
+    scenario.hands[static_cast<int>(Seat::South)] = {
+        Card::four_suit(CardId{1}, Rank::integer(12)),
+        normal_card(2, Suit::Clubs, 3),
+    };
+    const auto state = State::create(scenario);
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, {});
+
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(actions.front(), Action::play(CardId{2}, PlayMode::Lead, Suit::Clubs));
+}
+
+TEST(LegalMovesTest, ThreeSuitCatCannotLeadWhileAnOrdinaryCardRemains)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::South;
+    scenario.hands[static_cast<int>(Seat::South)] = {
+        Card::three_suit_cat(CardId{1}),
+        normal_card(2, Suit::Hearts, 3),
+    };
+    const auto state = State::create(scenario);
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, {});
+
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(actions.front(), Action::play(CardId{2}, PlayMode::Lead, Suit::Hearts));
+}
+
 }  // namespace
 }  // namespace touniu_solver

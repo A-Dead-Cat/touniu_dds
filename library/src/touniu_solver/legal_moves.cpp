@@ -5,6 +5,19 @@
 #include <utility>
 
 namespace touniu_solver {
+namespace {
+
+auto has_ordinary_card(const State& state, const std::vector<CardId>& hand) -> bool
+{
+    return std::any_of(hand.begin(), hand.end(), [&state](const CardId id) {
+        const Card* card = state.card(id);
+        assert(card != nullptr);
+        return card->kind() != CardKind::FourSuit &&
+               card->kind() != CardKind::ThreeSuitCat;
+    });
+}
+
+}  // namespace
 
 Action::Action(
     std::optional<CardId> card_id,
@@ -56,9 +69,15 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
 
     std::vector<Action> actions;
     if (trick.empty()) {
+        const bool ordinary_card_remains = has_ordinary_card(state, hand);
         for (const CardId id : hand) {
             const Card* card = state.card(id);
             assert(card != nullptr);
+            if (ordinary_card_remains &&
+                (card->kind() == CardKind::FourSuit ||
+                 card->kind() == CardKind::ThreeSuitCat)) {
+                continue;
+            }
             actions.push_back(Action::play(
                 id,
                 PlayMode::Lead,
