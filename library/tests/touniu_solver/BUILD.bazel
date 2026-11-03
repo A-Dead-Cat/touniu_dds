@@ -46,6 +46,7 @@ cc_test(
     srcs = ["position_test.cpp"],
     deps = [
         "//library/src/touniu_solver:position",
+        "//library/src/touniu_solver:position_hash",
         "@googletest//:gtest_main",
     ],
 )

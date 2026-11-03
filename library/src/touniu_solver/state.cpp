@@ -1,6 +1,7 @@
 #include "state.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <utility>
 
@@ -33,6 +34,8 @@ auto normal_suit_from_index(const std::uint64_t value) -> Suit
 
 }  // namespace
 
+thread_local std::uint64_t State::copy_count_ = 0;
+
 State::State(
     std::array<std::vector<CardId>, 4> hands,
     std::vector<Card> cards,
@@ -51,6 +54,45 @@ State::State(
       seed_(seed),
       draw_index_(draw_index)
 {
+}
+
+State::State(const State& other)
+    : hands_(other.hands_),
+      cards_(other.cards_),
+      next_player_(other.next_player_),
+      direction_(other.direction_),
+      contract_(other.contract_),
+      tricks_remaining_(other.tricks_remaining_),
+      seed_(other.seed_),
+      draw_index_(other.draw_index_)
+{
+    ++copy_count_;
+}
+
+auto State::operator=(const State& other) -> State&
+{
+    if (this != &other) {
+        hands_ = other.hands_;
+        cards_ = other.cards_;
+        next_player_ = other.next_player_;
+        direction_ = other.direction_;
+        contract_ = other.contract_;
+        tricks_remaining_ = other.tricks_remaining_;
+        seed_ = other.seed_;
+        draw_index_ = other.draw_index_;
+        ++copy_count_;
+    }
+    return *this;
+}
+
+void State::reset_copy_count_for_testing()
+{
+    copy_count_ = 0;
+}
+
+auto State::copy_count_for_testing() -> std::uint64_t
+{
+    return copy_count_;
 }
 
 auto State::create(const Scenario& scenario) -> std::optional<State>
@@ -186,6 +228,33 @@ auto State::remove_from_hand(const Seat seat, const CardId id) -> bool
     }
     hand.erase(found);
     return true;
+}
+
+void State::insert_into_hand(const Seat seat, const std::size_t index, const CardId id)
+{
+    std::vector<CardId>& hand = hands_[seat_index(seat)];
+    const auto position = hand.begin() + static_cast<std::ptrdiff_t>(std::min(index, hand.size()));
+    hand.insert(position, id);
+}
+
+void State::remove_from_catalog(const CardId id)
+{
+    const auto found = std::find_if(cards_.begin(), cards_.end(), [id](const Card& card) {
+        return card.id() == id;
+    });
+    if (found != cards_.end()) {
+        cards_.erase(found);
+    }
+}
+
+void State::set_tricks_remaining(const std::uint32_t tricks_remaining)
+{
+    tricks_remaining_ = tricks_remaining;
+}
+
+void State::set_draw_index(const std::uint64_t draw_index)
+{
+    draw_index_ = draw_index;
 }
 
 void State::set_next_player(const Seat seat)

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <iterator>
 
 #include <touniu_solver/live_position.hpp>
 #include <touniu_solver/trick_resolution.hpp>
@@ -84,11 +85,11 @@ Position::Position(State state) : state_(std::move(state))
 
 auto Position::create(const Scenario& scenario) -> std::optional<Position>
 {
-    const auto state = State::create(scenario);
+    auto state = State::create(scenario);
     if (!state.has_value()) {
         return std::nullopt;
     }
-    return Position(*state);
+    return Position(std::move(*state));
 }
 
 auto Position::create(const LivePosition& live) -> std::optional<Position>
@@ -241,48 +242,86 @@ auto Position::apply(const Action& action) -> bool
         return false;
     }
 
-    undo_stack_.push_back(Snapshot{
-        state_,
-        current_trick_,
-        pending_block_,
-        valid_reverse_count_,
-        tricks_won_,
-    });
+    UndoRecord record;
+    record.player = state_.next_player();
+    record.previous_next_player = record.player;
+    record.previous_direction = state_.direction();
+    record.previous_tricks_remaining = state_.tricks_remaining();
+    record.previous_draw_index = state_.draw_index();
+    record.previous_pending_block = pending_block_;
+    record.previous_valid_reverse_count = valid_reverse_count_;
+    record.previous_tricks_won = tricks_won_;
+    record.is_pass = action.is_pass();
 
-    if (action.is_pass()) {
-        apply_pass();
-    } else {
-        apply_play(action);
+    if (!record.is_pass) {
+        record.card = *action.card_id();
+        const std::vector<CardId>& hand = state_.hand(record.player);
+        const auto found = std::find(hand.begin(), hand.end(), record.card);
+        if (found == hand.end()) {
+            return false;
+        }
+        record.hand_index =
+            static_cast<std::size_t>(std::distance(hand.begin(), found));
     }
+
+    if (record.is_pass) {
+        apply_pass(record);
+    } else {
+        apply_play(action, record);
+    }
+
+    record.completed_trick = current_trick_.empty();
+    undo_stack_.push_back(std::move(record));
     return true;
 }
 
 void Position::undo()
 {
     assert(!undo_stack_.empty());
-    Snapshot snapshot = std::move(undo_stack_.back());
+    const UndoRecord& record = undo_stack_.back();
+
+    if (record.completed_trick) {
+        // The completed trick was cleared by the action; restore the four
+        // plays first, then drop this action's own play.
+        current_trick_ = record.cleared_trick;
+    }
+    current_trick_.pop_back();
+
+    for (auto drawn = record.drawn_cards.rbegin(); drawn != record.drawn_cards.rend();
+         ++drawn) {
+        state_.remove_from_hand(record.draw_target, *drawn);
+        state_.remove_from_catalog(*drawn);
+    }
+
+    if (!record.is_pass) {
+        state_.insert_into_hand(record.player, record.hand_index, record.card);
+    }
+
+    state_.set_draw_index(record.previous_draw_index);
+    state_.set_tricks_remaining(record.previous_tricks_remaining);
+    state_.set_direction(record.previous_direction);
+    state_.set_next_player(record.previous_next_player);
+    pending_block_ = record.previous_pending_block;
+    valid_reverse_count_ = record.previous_valid_reverse_count;
+    tricks_won_ = record.previous_tricks_won;
+
     undo_stack_.pop_back();
-    state_ = std::move(snapshot.state);
-    current_trick_ = std::move(snapshot.current_trick);
-    pending_block_ = snapshot.pending_block;
-    valid_reverse_count_ = snapshot.valid_reverse_count;
-    tricks_won_ = snapshot.tricks_won;
 }
 
-void Position::apply_pass()
+void Position::apply_pass(UndoRecord& record)
 {
     const Seat player = state_.next_player();
     current_trick_.push_back({player, Action::pass()});
     pending_block_ = std::nullopt;
 
     if (current_trick_.size() == 4U) {
-        finish_trick();
+        finish_trick(&record.cleared_trick);
     } else {
         state_.set_next_player(next_seat(player));
     }
 }
 
-void Position::apply_play(const Action& action)
+void Position::apply_play(const Action& action, UndoRecord& record)
 {
     const Seat player = state_.next_player();
     const CardId card_id = *action.card_id();
@@ -301,20 +340,24 @@ void Position::apply_play(const Action& action)
             ++valid_reverse_count_;
         } else if (card->kind() == CardKind::PlusTwo) {
             const Seat target = is_fourth ? current_trick_.front().seat : next_seat(player);
-            state_.draw_floating(target);
-            state_.draw_floating(target);
+            record.draw_target = target;
+            record.drawn_cards.push_back(state_.draw_floating(target).id());
+            record.drawn_cards.push_back(state_.draw_floating(target).id());
         }
     }
 
     if (current_trick_.size() == 4U) {
-        finish_trick();
+        finish_trick(&record.cleared_trick);
     } else {
         state_.set_next_player(next_seat(player));
     }
 }
 
-void Position::finish_trick()
+void Position::finish_trick(Trick* cleared_trick)
 {
+    if (cleared_trick != nullptr) {
+        *cleared_trick = current_trick_;
+    }
     const TrickResult result = resolve_trick(state_, current_trick_);
     ++tricks_won_[seat_index(result.winner)];
     state_.complete_trick();

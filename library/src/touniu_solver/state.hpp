@@ -39,13 +39,26 @@ public:
     auto draw_floating(Seat seat) -> Card;
     void complete_trick();
     auto remove_from_hand(Seat seat, CardId id) -> bool;
+    void insert_into_hand(Seat seat, std::size_t index, CardId id);
+    void remove_from_catalog(CardId id);
     void set_next_player(Seat seat);
     void set_direction(Direction direction);
+    void set_tricks_remaining(std::uint32_t tricks_remaining);
+    void set_draw_index(std::uint64_t draw_index);
+
+    State(const State& other);
+    auto operator=(const State& other) -> State&;
+    State(State&&) noexcept = default;
+    auto operator=(State&&) noexcept -> State& = default;
+
+    static void reset_copy_count_for_testing();
+    [[nodiscard]] static auto copy_count_for_testing() -> std::uint64_t;
 
 private:
     friend class Position;
 
     static constexpr std::uint64_t GeneratedCardIdBase = 0x8000000000000000ULL;
+    static thread_local std::uint64_t copy_count_;
 
     State(
         std::array<std::vector<CardId>, 4> hands,

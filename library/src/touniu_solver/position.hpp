@@ -40,27 +40,39 @@ public:
     [[nodiscard]] auto pending_block() const -> std::optional<Seat>;
 
 private:
-    struct Snapshot {
-        State state;
-        Trick current_trick;
-        std::optional<Seat> pending_block;
-        std::uint32_t valid_reverse_count;
-        std::array<std::uint32_t, 4> tricks_won;
+    // Only the data an action can change is recorded, so search can undo in
+    // place instead of copying the whole deal state at every node.
+    struct UndoRecord {
+        bool is_pass = false;
+        Seat player = Seat::West;
+        CardId card{};
+        std::size_t hand_index = 0;
+        Seat previous_next_player = Seat::West;
+        Direction previous_direction = Direction::Forward;
+        std::uint32_t previous_tricks_remaining = 0;
+        std::uint64_t previous_draw_index = 0;
+        std::optional<Seat> previous_pending_block;
+        std::uint32_t previous_valid_reverse_count = 0;
+        std::array<std::uint32_t, 4> previous_tricks_won{};
+        Seat draw_target = Seat::West;
+        std::vector<CardId> drawn_cards;
+        bool completed_trick = false;
+        Trick cleared_trick;
     };
 
     explicit Position(State state);
 
     [[nodiscard]] auto next_seat(Seat seat) const -> Seat;
-    void apply_pass();
-    void apply_play(const Action& action);
-    void finish_trick();
+    void apply_pass(UndoRecord& record);
+    void apply_play(const Action& action, UndoRecord& record);
+    void finish_trick(Trick* cleared_trick);
 
     State state_;
     Trick current_trick_;
     std::optional<Seat> pending_block_;
     std::uint32_t valid_reverse_count_ = 0;
     std::array<std::uint32_t, 4> tricks_won_{};
-    std::vector<Snapshot> undo_stack_;
+    std::vector<UndoRecord> undo_stack_;
 };
 
 }  // namespace touniu_solver
