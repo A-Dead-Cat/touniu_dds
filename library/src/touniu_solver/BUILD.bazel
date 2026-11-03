@@ -49,6 +49,18 @@ cc_library(
 )
 
 cc_library(
+    name = "live_position",
+    srcs = ["live_position.cpp"],
+    hdrs = ["live_position.hpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    include_prefix = "touniu_solver",
+    visibility = ["//visibility:public"],
+    deps = [":legal_moves"],
+)
+
+cc_library(
     name = "position",
     srcs = ["position.cpp"],
     hdrs = ["position.hpp"],
@@ -58,7 +70,7 @@ cc_library(
     include_prefix = "touniu_solver",
     visibility = ["//visibility:public"],
     deps = [
-        ":legal_moves",
+        ":live_position",
         ":trick_resolution",
     ],
 )

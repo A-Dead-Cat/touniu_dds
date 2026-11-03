@@ -51,6 +51,18 @@ cc_test(
 )
 
 cc_test(
+    name = "live_position_test",
+    size = "small",
+    srcs = ["live_position_test.cpp"],
+    deps = [
+        "//library/src/touniu_solver:live_position",
+        "//library/src/touniu_solver:position",
+        "//library/src/touniu_solver:position_hash",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "position_hash_test",
     size = "small",
     srcs = ["position_hash_test.cpp"],

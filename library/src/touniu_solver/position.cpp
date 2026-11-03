@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 
+#include <touniu_solver/live_position.hpp>
 #include <touniu_solver/trick_resolution.hpp>
 
 namespace touniu_solver {
@@ -32,6 +33,41 @@ auto Position::create(const Scenario& scenario) -> std::optional<Position>
         return std::nullopt;
     }
     return Position(*state);
+}
+
+auto Position::create(const LivePosition& live) -> std::optional<Position>
+{
+    if (!validate_live_position(live)) {
+        return std::nullopt;
+    }
+
+    auto state = State::restore(
+        live.hands,
+        live.cards,
+        live.next_player,
+        live.direction,
+        live.contract,
+        live.tricks_remaining,
+        live.seed,
+        live.draw_index
+    );
+    if (!state.has_value()) {
+        return std::nullopt;
+    }
+
+    Position position(std::move(*state));
+    for (const LiveTrickPlay& play : live.current_trick) {
+        position.current_trick_.push_back({
+            play.seat,
+            play.is_pass
+                ? Action::pass()
+                : Action::play(play.card_id, *play.mode, *play.effective_suit),
+        });
+    }
+    position.pending_block_ = live.pending_block;
+    position.valid_reverse_count_ = live.valid_reverse_count;
+    position.tricks_won_ = live.tricks_won;
+    return position;
 }
 
 auto Position::next_player() const -> Seat

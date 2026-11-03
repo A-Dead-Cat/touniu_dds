@@ -10,12 +10,15 @@
 
 namespace touniu_solver {
 
+struct LivePosition;
+
 // A complete, reversible game position for search. It owns the deal state, the
 // in-progress trick, the pending block target and the effective reverse count,
 // and applies/undoes legal actions exactly (including deterministic +2 draws).
 class Position {
 public:
     static auto create(const Scenario& scenario) -> std::optional<Position>;
+    static auto create(const LivePosition& live) -> std::optional<Position>;
 
     [[nodiscard]] auto legal_actions() const -> std::vector<Action>;
     auto apply(const Action& action) -> bool;

@@ -41,14 +41,16 @@ State::State(
     const Direction direction,
     const Contract contract,
     const std::uint32_t tricks_remaining,
-    const std::uint32_t seed)
+    const std::uint32_t seed,
+    const std::uint64_t draw_index)
     : hands_(std::move(hands)),
       cards_(std::move(cards)),
       next_player_(next_player),
       direction_(direction),
       contract_(contract),
       tricks_remaining_(tricks_remaining),
-      seed_(seed)
+      seed_(seed),
+      draw_index_(draw_index)
 {
 }
 
@@ -79,7 +81,30 @@ auto State::create(const Scenario& scenario) -> std::optional<State>
         scenario.direction,
         scenario.contract,
         scenario.tricks_remaining,
-        scenario.seed.value_or(DefaultGenerationSeed)
+        scenario.seed.value_or(DefaultGenerationSeed),
+        0
+    );
+}
+
+auto State::restore(
+    std::array<std::vector<CardId>, 4> hands,
+    std::vector<Card> cards,
+    const Seat next_player,
+    const Direction direction,
+    const Contract contract,
+    const std::uint32_t tricks_remaining,
+    const std::uint32_t seed,
+    const std::uint64_t draw_index) -> std::optional<State>
+{
+    return State(
+        std::move(hands),
+        std::move(cards),
+        next_player,
+        direction,
+        contract,
+        tricks_remaining,
+        seed,
+        draw_index
     );
 }
 
