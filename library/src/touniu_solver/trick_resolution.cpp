@@ -32,16 +32,20 @@ auto eligible(const State& state, const Trick& trick, const TrickPlay& play) -> 
     if (play.action.is_pass()) {
         return 0;
     }
-    const Card* lead = state.card(*trick.front().action.card_id());
     const Card* card = state.card(*play.action.card_id());
-    assert(lead != nullptr && card != nullptr);
+    assert(card != nullptr);
+    if (trick.front().action.is_pass()) {
+        return is_trump(state, *card, play.action) ? 3 : 1;
+    }
+    const Card* lead = state.card(*trick.front().action.card_id());
+    assert(lead != nullptr);
     if (lead->kind() == CardKind::FourSuit) {
         return 1;
     }
     if (is_trump(state, *card, play.action)) {
         return 3;
     }
-    if (lead->kind() == CardKind::ThreeSuitCat || trick.front().action.is_pass()) {
+    if (lead->kind() == CardKind::ThreeSuitCat) {
         return 1;
     }
     return play.action.effective_suit() == trick.front().action.effective_suit() ? 2 : 0;

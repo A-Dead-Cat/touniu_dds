@@ -79,5 +79,30 @@ TEST(TrickResolutionTest, EffectsRespectModeAndFourthHandRules)
     EXPECT_EQ(result.draws[1].seat, Seat::West);
 }
 
+TEST(TrickResolutionTest, PassLeadAllowsAnySuitButTrumpStillHasPriority)
+{
+    const State state = state_with(
+        {card(1, Suit::Spades, 14), card(2, Suit::Hearts, 2)}, Contract::Hearts);
+    const Trick trick{
+        {Seat::West, Action::pass()},
+        {Seat::North, Action::play(CardId{1}, PlayMode::Discard, Suit::Spades)},
+        {Seat::East, Action::play(CardId{2}, PlayMode::Trump, Suit::Hearts)},
+        {Seat::South, Action::pass()},
+    };
+
+    EXPECT_EQ(resolve_trick(state, trick).winner, Seat::East);
+}
+
+TEST(TrickResolutionTest, FourPassesAwardTheTrickToTheFirstSeat)
+{
+    const State state = state_with({});
+    const Trick trick{
+        {Seat::West, Action::pass()}, {Seat::North, Action::pass()},
+        {Seat::East, Action::pass()}, {Seat::South, Action::pass()},
+    };
+
+    EXPECT_EQ(resolve_trick(state, trick).winner, Seat::West);
+}
+
 }  // namespace
 }  // namespace touniu_solver
