@@ -96,8 +96,10 @@ choice when a card can legally be played.
   is collected, an odd count reverses direction before the next lead. A
   discarded `🔄` does not count.
 - A `+2` immediately adds two deterministically generated floating cards to
-  the next seat in the current direction. Draws change the hand before that
-  seat takes its next turn.
+  the next seat in the current direction, regardless of who later wins the
+  trick. In particular, a fourth-hand `+2` draws for that trick's first seat;
+  the draw occurs before winner determination and before the next trick is
+  led.
 
 ## Search and transpositions
 
