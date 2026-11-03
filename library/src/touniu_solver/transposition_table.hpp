@@ -41,13 +41,14 @@ public:
 
     [[nodiscard]] auto probe(PositionIdentity identity) -> Probe;
 
-    void store(
+    // Returns true when a different record was evicted to make room.
+    auto store(
         PositionIdentity identity,
         std::uint32_t depth,
         std::optional<int> exact,
         std::optional<int> lower,
         std::optional<int> upper,
-        const std::optional<Action>& best_action);
+        const std::optional<Action>& best_action) -> bool;
 
     [[nodiscard]] auto size() const -> std::size_t
     {

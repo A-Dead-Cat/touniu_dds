@@ -20,6 +20,7 @@ struct Args {
     std::uint32_t seed = 591601503U;
     bool legacy = false;
     bool contract_table = false;
+    bool batch_only = false;
 };
 
 auto parse_uint(const char* text, std::uint32_t& out) -> bool
@@ -53,6 +54,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.legacy = true;
         } else if (flag == "--contract") {
             args.contract_table = true;
+        } else if (flag == "--batch-only") {
+            args.batch_only = true;
         }
     }
     if (args.cards < 1) args.cards = 1;
@@ -162,6 +165,10 @@ int main(int argc, char** argv)
         std::vector<unsigned long long> nodes_batch_samples;
         unsigned long long total_v2 = 0;
         unsigned long long total_batch = 0;
+        unsigned long long replacements_v2 = 0;
+        unsigned long long replacements_batch = 0;
+        SearchStats totals_v2;
+        SearchStats totals_batch;
         int mismatches = 0;
 
         for (int sample = 0; sample < args.samples; ++sample) {
@@ -173,6 +180,7 @@ int main(int argc, char** argv)
             unsigned long long sample_batch = 0;
 
             const auto start_v2 = std::chrono::steady_clock::now();
+            if (!args.batch_only) {
             for (int strain = 0; strain < 5; ++strain) {
                 for (int declarer = 0; declarer < 4; ++declarer) {
                     Scenario scenario = base;
@@ -188,7 +196,14 @@ int main(int argc, char** argv)
                         solve(*position, declarer_target(declarer),
                               SearchOptions{true, true, &stats}).tricks);
                     sample_v2 += stats.nodes;
+                    replacements_v2 += stats.table_replacements;
+                    totals_v2.nodes += stats.nodes;
+                    totals_v2.table_queries += stats.table_queries;
+                    totals_v2.table_hits += stats.table_hits;
+                    totals_v2.collision_rejections += stats.collision_rejections;
+                    totals_v2.table_replacements += stats.table_replacements;
                 }
+            }
             }
             const auto end_v2 = std::chrono::steady_clock::now();
 
@@ -212,6 +227,12 @@ int main(int argc, char** argv)
                 const std::vector<int> values = solve_contract_batch(
                     queries, SearchOptions{true, true, &stats});
                 sample_batch += stats.nodes;
+                replacements_batch += stats.table_replacements;
+                totals_batch.nodes += stats.nodes;
+                totals_batch.table_queries += stats.table_queries;
+                totals_batch.table_hits += stats.table_hits;
+                totals_batch.collision_rejections += stats.collision_rejections;
+                totals_batch.table_replacements += stats.table_replacements;
                 values_batch.insert(values_batch.end(), values.begin(), values.end());
             }
             const auto end_batch = std::chrono::steady_clock::now();
@@ -222,8 +243,10 @@ int main(int argc, char** argv)
                     ++mismatches;
                 }
             }
-            times_v2.push_back(
-                std::chrono::duration<double, std::milli>(end_v2 - start_v2).count());
+            if (!args.batch_only) {
+                times_v2.push_back(
+                    std::chrono::duration<double, std::milli>(end_v2 - start_v2).count());
+            }
             times_batch.push_back(
                 std::chrono::duration<double, std::milli>(end_batch - start_batch).count());
             nodes_v2_samples.push_back(sample_v2);
@@ -243,6 +266,10 @@ int main(int argc, char** argv)
             "{\"cards\":%d,\"samples\":%d,\"seed\":%u,\"mode\":\"contract\","
             "\"average_ms_v2\":%.3f,\"average_ms_batch\":%.3f,"
             "\"nodes_v2\":%llu,\"nodes_batch\":%llu,\"mismatches\":%d,"
+            "\"replacements_v2\":%llu,\"replacements_batch\":%llu,"
+            "\"batch_only\":%s,"
+            "\"queries_v2\":%llu,\"hits_v2\":%llu,\"collisions_v2\":%llu,"
+            "\"queries_batch\":%llu,\"hits_batch\":%llu,\"collisions_batch\":%llu,"
             "\"samples_ms_v2\":[",
             args.cards,
             args.samples,
@@ -251,7 +278,16 @@ int main(int argc, char** argv)
             average(times_batch),
             total_v2,
             total_batch,
-            mismatches);
+            mismatches,
+            replacements_v2,
+            replacements_batch,
+            args.batch_only ? "true" : "false",
+            static_cast<unsigned long long>(totals_v2.table_queries),
+            static_cast<unsigned long long>(totals_v2.table_hits),
+            static_cast<unsigned long long>(totals_v2.collision_rejections),
+            static_cast<unsigned long long>(totals_batch.table_queries),
+            static_cast<unsigned long long>(totals_batch.table_hits),
+            static_cast<unsigned long long>(totals_batch.collision_rejections));
         for (std::size_t index = 0; index < times_v2.size(); ++index) {
             std::printf("%s%.3f", index == 0 ? "" : ",", times_v2[index]);
         }
@@ -325,6 +361,7 @@ int main(int argc, char** argv)
         totals.pvs_researches += stats.pvs_researches;
         totals.equivalent_groups += stats.equivalent_groups;
         totals.equivalent_skips += stats.equivalent_skips;
+        totals.table_replacements += stats.table_replacements;
     }
 
     const double average_ms = total_ms / args.samples;
@@ -335,6 +372,7 @@ int main(int argc, char** argv)
         "\"collision_rejections\":%llu,\"cutoffs\":%llu,"
         "\"pvs_null_windows\":%llu,\"pvs_researches\":%llu,"
         "\"equivalent_groups\":%llu,\"equivalent_skips\":%llu,"
+        "\"table_replacements\":%llu,"
         "\"samples_nodes\":[",
         args.cards,
         args.samples,
@@ -351,7 +389,8 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(totals.pvs_null_windows),
         static_cast<unsigned long long>(totals.pvs_researches),
         static_cast<unsigned long long>(totals.equivalent_groups),
-        static_cast<unsigned long long>(totals.equivalent_skips));
+        static_cast<unsigned long long>(totals.equivalent_skips),
+        static_cast<unsigned long long>(totals.table_replacements));
     for (std::size_t index = 0; index < sample_nodes.size(); ++index) {
         std::printf("%s%llu", index == 0 ? "" : ",", sample_nodes[index]);
     }

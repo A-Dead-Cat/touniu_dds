@@ -181,6 +181,23 @@ int32_t touniu_solver_analyze_actions_v2(
 );
 
 /*
+ * Contract-table memory tier. It only changes how many slots the contract
+ * transposition table keeps per Worker; cached values are unaffected.
+ */
+enum TouniuContractTableTier {
+    TOUNIU_CONTRACT_TABLE_STANDARD = 0,
+    TOUNIU_CONTRACT_TABLE_LOW_MEMORY = 1
+};
+
+/*
+ * Selects the contract-table tier for this module instance. The default is
+ * TOUNIU_CONTRACT_TABLE_STANDARD. Returns TOUNIU_SOLVER_OK or
+ * TOUNIU_SOLVER_INVALID_REQUEST for an unknown tier. Applies to later
+ * touniu_solver_analyze_contract_batch_v3 calls in the same instance.
+ */
+int32_t touniu_solver_set_contract_table_tier_v1(int32_t tier);
+
+/*
  * ABI v3: solve 1-4 declarers of one deal and strain with a shared, verified
  * transposition table. Every element must be a valid v2 request for the same
  * cards, hands, seed, draw index, direction, contract, tricks won and tricks

@@ -255,6 +255,27 @@ async function main() {
           fail(`batch result ${index} differs from ABI v2`);
         }
       }
+      if (typeof module._touniu_solver_set_contract_table_tier_v1 !== "function") {
+        fail("missing export _touniu_solver_set_contract_table_tier_v1");
+      }
+      if (module._touniu_solver_set_contract_table_tier_v1(1) !== OK) {
+        fail("could not select the low-memory contract tier");
+      }
+      const lowStatus = module._touniu_solver_analyze_contract_batch_v3(
+        batchRequests, 2, batchOutput, 2, batchRequired,
+      );
+      if (lowStatus !== OK) fail(`low-tier batch status ${lowStatus}`);
+      for (let index = 0; index < 2; index += 1) {
+        if (module.getValue(batchOutput + index * 4, "i32") !== expected[index]) {
+          fail("low-tier batch result differs");
+        }
+      }
+      if (module._touniu_solver_set_contract_table_tier_v1(0) !== OK) {
+        fail("could not restore the default contract tier");
+      }
+      if (module._touniu_solver_set_contract_table_tier_v1(9) === OK) {
+        fail("invalid contract tier accepted");
+      }
     } finally {
       module._free(batchRequired);
       module._free(batchOutput);

@@ -101,5 +101,32 @@ TEST(TranspositionTableTest, DeeperRecordSupersedesShallowerOne)
     EXPECT_FALSE(entry->exact.has_value());
 }
 
+TEST(TranspositionTableTest, EvictionIsReportedOnlyWhenAVictimIsReplaced)
+{
+    TranspositionTable table;
+    // The default table has 256 buckets, so these primaries share bucket 0.
+    for (std::uint64_t index = 0; index < 4U; ++index) {
+        EXPECT_FALSE(table.store(
+            PositionIdentity{index * 256U, index},
+            3,
+            static_cast<int>(index),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt));
+    }
+
+    // Merging into the same identity is not an eviction.
+    EXPECT_FALSE(table.store(
+        PositionIdentity{0, 0}, 3, std::nullopt, 2, std::nullopt, std::nullopt));
+
+    // A fifth distinct identity at the same depth replaces the shallowest slot.
+    EXPECT_TRUE(table.store(
+        PositionIdentity{4 * 256U, 4}, 3, 7, std::nullopt, std::nullopt, std::nullopt));
+    const auto probe = table.probe(PositionIdentity{4 * 256U, 4});
+    ASSERT_NE(probe.entry, nullptr);
+    ASSERT_TRUE(probe.entry->exact.has_value());
+    EXPECT_EQ(*probe.entry->exact, 7);
+}
+
 }  // namespace
 }  // namespace touniu_solver

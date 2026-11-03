@@ -381,6 +381,9 @@ namespace {
 
 using namespace touniu_solver;
 
+// Per-instance contract-table tier; one WASM Worker owns one instance.
+std::int32_t contract_table_tier = TOUNIU_CONTRACT_TABLE_STANDARD;
+
 // Canonical declarer order used by the batch ABI: North, South, East, West.
 // -1 means the leader/target combination is not a legal contract query.
 auto declarer_order(const TouniuAnalyzeRequest& request) -> int
@@ -508,9 +511,23 @@ extern "C" auto touniu_solver_analyze_contract_batch_v3(
             {std::move(*position), targets[index]});
     }
 
-    const std::vector<int> values = solve_contract_batch(queries);
+    const ContractTableCapacity capacity =
+        contract_table_tier == TOUNIU_CONTRACT_TABLE_LOW_MEMORY
+        ? ContractTableCapacity::LowMemory : ContractTableCapacity::Standard;
+    const std::vector<int> values = solve_contract_batch(queries, SearchOptions{}, capacity);
     for (std::uint32_t index = 0; index < request_count; ++index) {
         final_tricks[index] = values[index];
     }
+    return TOUNIU_SOLVER_OK;
+}
+
+extern "C" auto touniu_solver_set_contract_table_tier_v1(const std::int32_t tier)
+    -> std::int32_t
+{
+    if (tier != TOUNIU_CONTRACT_TABLE_STANDARD &&
+        tier != TOUNIU_CONTRACT_TABLE_LOW_MEMORY) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+    contract_table_tier = tier;
     return TOUNIU_SOLVER_OK;
 }

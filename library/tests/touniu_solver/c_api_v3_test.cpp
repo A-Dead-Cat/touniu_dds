@@ -200,6 +200,40 @@ TEST(TouniuContractBatchV3Test, RejectsIncompatibleBatches)
     EXPECT_EQ(run(empty), TOUNIU_SOLVER_INVALID_REQUEST);
 }
 
+TEST(TouniuContractBatchV3Test, ContractTableTiersKeepValuesIdentical)
+{
+    BatchFixture fixture = contract_batch();
+    std::array<std::int32_t, 4> standard{};
+    std::array<std::int32_t, 4> low{};
+    std::uint32_t required = 0U;
+
+    ASSERT_EQ(
+        touniu_solver_set_contract_table_tier_v1(TOUNIU_CONTRACT_TABLE_STANDARD),
+        TOUNIU_SOLVER_OK);
+    ASSERT_EQ(
+        touniu_solver_analyze_contract_batch_v3(
+            fixture.requests.data(), 4U, standard.data(), 4U, &required),
+        TOUNIU_SOLVER_OK);
+
+    ASSERT_EQ(
+        touniu_solver_set_contract_table_tier_v1(TOUNIU_CONTRACT_TABLE_LOW_MEMORY),
+        TOUNIU_SOLVER_OK);
+    ASSERT_EQ(
+        touniu_solver_analyze_contract_batch_v3(
+            fixture.requests.data(), 4U, low.data(), 4U, &required),
+        TOUNIU_SOLVER_OK);
+
+    EXPECT_EQ(standard, low);
+
+    EXPECT_EQ(
+        touniu_solver_set_contract_table_tier_v1(7),
+        TOUNIU_SOLVER_INVALID_REQUEST);
+    // Restore the default so other tests in this process are unaffected.
+    EXPECT_EQ(
+        touniu_solver_set_contract_table_tier_v1(TOUNIU_CONTRACT_TABLE_STANDARD),
+        TOUNIU_SOLVER_OK);
+}
+
 TEST(TouniuContractBatchV3Test, RejectsNullArguments)
 {
     BatchFixture fixture = contract_batch();

@@ -553,6 +553,37 @@ TEST(SearchTest, EastWestActionValuesMatchTheOracle)
     }
 }
 
+auto tier_scenario(const int cards) -> Scenario
+{
+    Scenario scenario;
+    scenario.tricks_remaining = static_cast<std::uint32_t>(cards);
+    std::uint64_t id = 1;
+    for (int index = 0; index < cards * 4; ++index) {
+        scenario.hands[static_cast<std::size_t>(index % 4)].push_back(
+            Card::normal(CardId{id++}, Suit::Spades, Rank::integer(2 + index / 4)));
+    }
+    return scenario;
+}
+
+TEST(SearchTest, ContractTableSlotsFollowCardCountAndMemoryTier)
+{
+    const auto slots = [](const int cards, const ContractTableCapacity capacity) {
+        auto position = Position::create(tier_scenario(cards));
+        EXPECT_TRUE(position.has_value());
+        return contract_table_slots(*position, capacity);
+    };
+
+    EXPECT_EQ(slots(5, ContractTableCapacity::Standard), 1U << 15U);
+    EXPECT_EQ(slots(6, ContractTableCapacity::Standard), 1U << 17U);
+    EXPECT_EQ(slots(7, ContractTableCapacity::Standard), 1U << 20U);
+    EXPECT_EQ(slots(8, ContractTableCapacity::Standard), 1U << 22U);
+    EXPECT_EQ(slots(10, ContractTableCapacity::Standard), 1U << 22U);
+
+    EXPECT_EQ(slots(8, ContractTableCapacity::LowMemory), 1U << 20U);
+    EXPECT_EQ(slots(10, ContractTableCapacity::LowMemory), 1U << 20U);
+    EXPECT_EQ(slots(7, ContractTableCapacity::LowMemory), 1U << 20U);
+}
+
 TEST(SearchTest, DeterministicOrderingKeepsCanonicalBestAction)
 {
     for (int deal_index = 0; deal_index < 4; ++deal_index) {

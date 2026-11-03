@@ -173,6 +173,12 @@ choice when a card can legally be played.
   the leader and target differ, requires an empty trick boundary and a legal
   declarer/leader pair in North, South, East, West order, and returns target
   trick counts in input order.
+- Contract solves size their table from the cards in play and cap it by a
+  caller-selected memory tier: `2^22` slots (128 MiB) for standard devices and
+  `2^20` (32 MiB) when device memory is unknown or below 2 GiB. The tier only
+  changes capacity, never cached values; ABI v3 keeps the standard default and
+  `touniu_solver_set_contract_table_tier_v1` selects a tier per module
+  instance. Per-action analysis keeps its own cards-based ceiling.
 - The C ABI currently accepts positions at a trick boundary. Importing an
   already-partially-played trick will be added before TouniuBridge uses the
   solver for mid-trick advice.

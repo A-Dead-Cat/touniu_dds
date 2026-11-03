@@ -51,10 +51,13 @@ auto search_depth(const Position& position) -> std::uint32_t
 }
 
 // Contract solves explore far fewer nodes than per-action analysis, so their
-// table is sized by the cards in play and capped at 128 MiB. That keeps a
-// four-worker contract pool inside client memory even though the Playground
-// always requests the full 13-trick limit.
-auto transposition_slots(const Position& position) -> std::size_t
+// table is sized by the cards in play and capped by the caller's memory tier:
+// 128 MiB per worker on standard devices, 32 MiB when memory is unknown or
+// small. The Playground's fixed 13-trick limit must not shrink the table below
+// what the dealt cards call for.
+auto transposition_slots(
+    const Position& position,
+    const ContractTableCapacity capacity) -> std::size_t
 {
     std::size_t cards = position.current_trick().size();
     for (int seat = 0; seat < 4; ++seat) {
@@ -70,7 +73,7 @@ auto transposition_slots(const Position& position) -> std::size_t
     if (per_seat == 7U) {
         return 1U << 20U;
     }
-    return 1U << 22U;
+    return capacity == ContractTableCapacity::LowMemory ? 1U << 20U : 1U << 22U;
 }
 
 // Per-action analysis explores a much larger tree than a single contract
@@ -238,7 +241,10 @@ private:
         if (!options_.use_transposition_table || depth == 0U) {
             return;
         }
-        table_.store(identity, depth, exact, lower, upper, best_action);
+        if (table_.store(identity, depth, exact, lower, upper, best_action) &&
+            options_.stats != nullptr) {
+            ++options_.stats->table_replacements;
+        }
     }
 
     // MTD(f): converge on the exact value with repeated null-window searches.
@@ -624,7 +630,7 @@ auto solve(Position& position, Partnership target, const SearchOptions& options)
     SearchContext context(
         options,
         static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
-        transposition_slots(position));
+        transposition_slots(position, ContractTableCapacity::Standard));
     return context.solve_for(position, target);
 }
 
@@ -650,9 +656,17 @@ auto analyze_actions(
     return context.analyze(position, target);
 }
 
+auto contract_table_slots(
+    const Position& position,
+    const ContractTableCapacity capacity) -> std::size_t
+{
+    return transposition_slots(position, capacity);
+}
+
 auto solve_contract_batch(
     std::vector<ContractQuery>& queries,
-    const SearchOptions& options) -> std::vector<int>
+    const SearchOptions& options,
+    const ContractTableCapacity capacity) -> std::vector<int>
 {
     std::vector<int> results;
     results.reserve(queries.size());
@@ -666,7 +680,8 @@ auto solve_contract_batch(
         const std::uint32_t tricks = query.position.tricks_remaining();
         buffer_count = std::max(
             buffer_count, static_cast<std::size_t>(tricks) * 4U + 1U);
-        table_slots = std::max(table_slots, transposition_slots(query.position));
+        table_slots = std::max(
+            table_slots, transposition_slots(query.position, capacity));
     }
 
     // One shared table for every declarer of this deal and strain. Heuristics

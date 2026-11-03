@@ -137,13 +137,13 @@ void TranspositionTable::merge(
     }
 }
 
-void TranspositionTable::store(
+auto TranspositionTable::store(
     const PositionIdentity identity,
     const std::uint32_t depth,
     const std::optional<int> exact,
     const std::optional<int> lower,
     const std::optional<int> upper,
-    const std::optional<Action>& best_action)
+    const std::optional<Action>& best_action) -> bool
 {
     const std::size_t base = (identity.primary & bucket_mask_) * BucketSize;
     Slot* victim = nullptr;
@@ -157,11 +157,11 @@ void TranspositionTable::store(
             write_best_action(slot, best_action);
             merge(slot, depth, exact, lower, upper, best_action);
             ++live_entries_;
-            return;
+            return false;
         }
         if (slot.primary == identity.primary && slot.verifier == identity.verifier) {
             merge(slot, depth, exact, lower, upper, best_action);
-            return;
+            return false;
         }
         if (victim == nullptr || slot.depth < victim->depth) {
             victim = &slot;
@@ -177,7 +177,9 @@ void TranspositionTable::store(
         victim->flags = 0U;
         write_best_action(*victim, best_action);
         merge(*victim, depth, exact, lower, upper, best_action);
+        return true;
     }
+    return false;
 }
 
 }  // namespace touniu_solver

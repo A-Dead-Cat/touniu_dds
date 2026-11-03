@@ -29,6 +29,7 @@ struct SearchStats {
     std::uint64_t ordering_static = 0;
     std::uint64_t equivalent_groups = 0;
     std::uint64_t equivalent_skips = 0;
+    std::uint64_t table_replacements = 0;
 };
 
 struct SearchOptions {
@@ -52,6 +53,13 @@ struct SearchResult {
 struct ActionAnalysis {
     Action action;
     int final_tricks = 0;
+};
+
+// Table budget for contract solves, chosen by the caller from the device's
+// memory hint. It only changes capacity, never cached values.
+enum class ContractTableCapacity {
+    Standard,
+    LowMemory,
 };
 
 // One contract-table query: a starting position plus the partnership whose
@@ -85,7 +93,15 @@ auto analyze_actions(
 // Ordering heuristics are reset between queries.
 auto solve_contract_batch(
     std::vector<ContractQuery>& queries,
-    const SearchOptions& options = {}) -> std::vector<int>;
+    const SearchOptions& options = {},
+    ContractTableCapacity capacity = ContractTableCapacity::Standard)
+    -> std::vector<int>;
+
+// Single capacity decision point for contract solves. Exposed for tests; it
+// never changes the values produced by the search.
+auto contract_table_slots(
+    const Position& position,
+    ContractTableCapacity capacity) -> std::size_t;
 
 // Conservative equivalence predicate used by the search. Exposed for tests; it
 // never reports equivalence when a special, multi-suit or +2 card remains able
