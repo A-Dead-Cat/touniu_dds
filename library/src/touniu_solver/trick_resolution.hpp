@@ -20,5 +20,6 @@ struct TrickResult {
 };
 
 auto resolve_trick(const State& state, const Trick& trick) -> TrickResult;
+void apply_draw_effects(State& state, const TrickResult& result);
 
 }  // namespace touniu_solver

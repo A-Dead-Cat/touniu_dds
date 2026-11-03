@@ -79,6 +79,25 @@ TEST(TrickResolutionTest, EffectsRespectModeAndFourthHandRules)
     EXPECT_EQ(result.draws[1].seat, Seat::West);
 }
 
+TEST(TrickResolutionTest, ApplyingFourthHandPlusTwoDrawsForFirstSeat)
+{
+    Scenario scenario;
+    scenario.seed = 73U;
+    scenario.hands[static_cast<int>(Seat::South)] = {Card::plus_two(CardId{4}, Suit::Spades)};
+    auto state = *State::create(scenario);
+    const Trick trick{
+        {Seat::West, Action::pass()}, {Seat::North, Action::pass()},
+        {Seat::East, Action::pass()},
+        {Seat::South, Action::play(CardId{4}, PlayMode::Follow, Suit::Spades)},
+    };
+
+    const TrickResult result = resolve_trick(state, trick);
+    apply_draw_effects(state, result);
+
+    EXPECT_EQ(state.hand(Seat::West).size(), 2U);
+    EXPECT_EQ(state.draw_index(), 2U);
+}
+
 TEST(TrickResolutionTest, PassLeadAllowsAnySuitButTrumpStillHasPriority)
 {
     const State state = state_with(

@@ -105,4 +105,13 @@ auto resolve_trick(const State& state, const Trick& trick) -> TrickResult
     return result;
 }
 
+void apply_draw_effects(State& state, const TrickResult& result)
+{
+    for (const DrawEffect& effect : result.draws) {
+        for (std::uint32_t draw = 0; draw < effect.count; ++draw) {
+            state.draw_floating(effect.seat);
+        }
+    }
+}
+
 }  // namespace touniu_solver
