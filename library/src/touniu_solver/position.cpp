@@ -134,7 +134,7 @@ auto Position::create(const LivePosition& live) -> std::optional<Position>
         const Action action = play.is_pass
             ? Action::pass()
             : Action::play(play.card_id, *play.mode, *play.effective_suit);
-        const std::vector<Action> legal = replay.legal_actions();
+        const ActionList legal = replay.legal_actions();
         if (std::find(legal.begin(), legal.end(), action) == legal.end() ||
             !replay.apply(action)) {
             return std::nullopt;
@@ -259,24 +259,39 @@ auto Position::next_seat(const Seat seat) const -> Seat
     );
 }
 
-auto Position::legal_actions() const -> std::vector<Action>
+auto Position::legal_actions() const -> ActionList
+{
+    ActionList actions;
+    legal_actions_into(actions);
+    return actions;
+}
+
+void Position::legal_actions_into(ActionList& out) const
 {
     if (state_.is_finished()) {
-        return {};
+        out.clear();
+        return;
     }
     if (pending_block_.has_value() && *pending_block_ == state_.next_player()) {
-        return {Action::pass()};
+        out.clear();
+        out.push_back(Action::pass());
+        return;
     }
-    return touniu_solver::legal_actions(state_, current_trick_);
+    touniu_solver::legal_actions_into(state_, current_trick_, out);
 }
 
 auto Position::apply(const Action& action) -> bool
 {
-    const std::vector<Action> legal = legal_actions();
+    const ActionList legal = legal_actions();
     if (std::find(legal.begin(), legal.end(), action) == legal.end()) {
         return false;
     }
+    apply_known_legal(action);
+    return true;
+}
 
+void Position::apply_known_legal(const Action& action)
+{
     UndoRecord record;
     record.previous_identity = identity_;
     record.player = state_.next_player();
@@ -293,9 +308,7 @@ auto Position::apply(const Action& action) -> bool
         record.card = *action.card_id();
         const std::vector<CardId>& hand = state_.hand(record.player);
         const auto found = std::find(hand.begin(), hand.end(), record.card);
-        if (found == hand.end()) {
-            return false;
-        }
+        assert(found != hand.end());
         record.hand_index =
             static_cast<std::size_t>(std::distance(hand.begin(), found));
     }
@@ -308,7 +321,6 @@ auto Position::apply(const Action& action) -> bool
 
     record.completed_trick = current_trick_.empty();
     undo_stack_.push_back(std::move(record));
-    return true;
 }
 
 void Position::undo()

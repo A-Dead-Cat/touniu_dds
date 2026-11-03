@@ -21,8 +21,15 @@ public:
     static auto create(const Scenario& scenario) -> std::optional<Position>;
     static auto create(const LivePosition& live) -> std::optional<Position>;
 
-    [[nodiscard]] auto legal_actions() const -> std::vector<Action>;
+    [[nodiscard]] auto legal_actions() const -> ActionList;
+    // Same actions written into a caller-owned buffer so search can reuse one
+    // list per ply instead of allocating at every node.
+    void legal_actions_into(ActionList& out) const;
     auto apply(const Action& action) -> bool;
+    // Search-only entry: the caller must pass an action from the current
+    // legal_actions() of this position. It skips the second legality pass but
+    // performs exactly the same state changes as apply().
+    void apply_known_legal(const Action& action);
     void undo();
 
     [[nodiscard]] auto next_player() const -> Seat;

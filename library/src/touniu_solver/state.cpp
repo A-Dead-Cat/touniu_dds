@@ -54,11 +54,13 @@ State::State(
       seed_(seed),
       draw_index_(draw_index)
 {
+    rebuild_card_index();
 }
 
 State::State(const State& other)
     : hands_(other.hands_),
       cards_(other.cards_),
+      card_index_(other.card_index_),
       next_player_(other.next_player_),
       direction_(other.direction_),
       contract_(other.contract_),
@@ -74,6 +76,7 @@ auto State::operator=(const State& other) -> State&
     if (this != &other) {
         hands_ = other.hands_;
         cards_ = other.cards_;
+        card_index_ = other.card_index_;
         next_player_ = other.next_player_;
         direction_ = other.direction_;
         contract_ = other.contract_;
@@ -139,10 +142,23 @@ auto State::hands() const -> const std::array<std::vector<CardId>, 4>&
 
 auto State::card(const CardId id) const -> const Card*
 {
-    const auto found = std::find_if(cards_.begin(), cards_.end(), [id](const Card& card) {
-        return card.id() == id;
-    });
-    return found == cards_.end() ? nullptr : &*found;
+    const std::size_t position = card_position(id);
+    return position == cards_.size() ? nullptr : &cards_[position];
+}
+
+auto State::card_position(const CardId id) const -> std::size_t
+{
+    const auto found = std::lower_bound(
+        card_index_.begin(),
+        card_index_.end(),
+        id.value,
+        [](const std::pair<std::uint64_t, std::uint32_t>& entry, const std::uint64_t value) {
+            return entry.first < value;
+        });
+    if (found == card_index_.end() || found->first != id.value) {
+        return cards_.size();
+    }
+    return found->second;
 }
 
 auto State::cards() const -> const std::vector<Card>&
@@ -212,6 +228,7 @@ auto State::draw_floating(const Seat seat) -> Card
         }
 
         cards_.push_back(card);
+        insert_card_index(card.id().value, cards_.size() - 1U);
         hands_[seat_index(seat)].push_back(card.id());
         return card;
     }
@@ -244,12 +261,12 @@ void State::insert_into_hand(const Seat seat, const std::size_t index, const Car
 
 void State::remove_from_catalog(const CardId id)
 {
-    const auto found = std::find_if(cards_.begin(), cards_.end(), [id](const Card& card) {
-        return card.id() == id;
-    });
-    if (found != cards_.end()) {
-        cards_.erase(found);
+    const std::size_t position = card_position(id);
+    if (position == cards_.size()) {
+        return;
     }
+    cards_.erase(cards_.begin() + static_cast<std::ptrdiff_t>(position));
+    erase_card_index(id.value, position);
 }
 
 void State::set_tricks_remaining(const std::uint32_t tricks_remaining)
@@ -274,9 +291,65 @@ void State::set_direction(const Direction direction)
 
 auto State::card_id_exists(const CardId id) const -> bool
 {
-    return std::any_of(cards_.begin(), cards_.end(), [id](const Card& card) {
-        return card.id() == id;
-    });
+    return card_position(id) != cards_.size();
+}
+
+void State::rebuild_card_index()
+{
+    card_index_.clear();
+    card_index_.reserve(cards_.size());
+    for (std::size_t index = 0; index < cards_.size(); ++index) {
+        card_index_.push_back(
+            {cards_[index].id().value, static_cast<std::uint32_t>(index)});
+    }
+    std::sort(card_index_.begin(), card_index_.end());
+}
+
+void State::insert_card_index(const std::uint64_t id, const std::size_t position)
+{
+    const auto found = std::lower_bound(
+        card_index_.begin(),
+        card_index_.end(),
+        id,
+        [](const std::pair<std::uint64_t, std::uint32_t>& entry, const std::uint64_t value) {
+            return entry.first < value;
+        });
+    card_index_.insert(
+        found, {id, static_cast<std::uint32_t>(position)});
+}
+
+void State::erase_card_index(const std::uint64_t id, const std::size_t position)
+{
+    const auto found = std::lower_bound(
+        card_index_.begin(),
+        card_index_.end(),
+        id,
+        [](const std::pair<std::uint64_t, std::uint32_t>& entry, const std::uint64_t value) {
+            return entry.first < value;
+        });
+    if (found != card_index_.end() && found->first == id) {
+        card_index_.erase(found);
+    }
+    const auto erased = static_cast<std::uint32_t>(position);
+    for (auto& entry : card_index_) {
+        if (entry.second > erased) {
+            --entry.second;
+        }
+    }
+}
+
+auto State::card_index_is_consistent_for_testing() const -> bool
+{
+    if (card_index_.size() != cards_.size()) {
+        return false;
+    }
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> expected;
+    expected.reserve(cards_.size());
+    for (std::size_t index = 0; index < cards_.size(); ++index) {
+        expected.push_back({cards_[index].id().value, static_cast<std::uint32_t>(index)});
+    }
+    std::sort(expected.begin(), expected.end());
+    return expected == card_index_;
 }
 
 auto State::floating_template_exists(const Card& candidate) const -> bool

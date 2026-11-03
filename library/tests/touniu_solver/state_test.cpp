@@ -121,5 +121,40 @@ TEST(StateTest, TrickLimitEndsGameWithoutDiscardingStoredHands)
     EXPECT_EQ(mutable_state.hand(Seat::South).size(), 2U);
 }
 
+TEST(StateTest, CardIndexTracksGeneratedCardsAndCatalogRemovals)
+{
+    Scenario scenario;
+    scenario.seed = 0;
+    scenario.tricks_remaining = 1;
+    scenario.hands[static_cast<int>(Seat::West)] = {
+        normal_card(7, Suit::Clubs, 9),
+        normal_card(3, Suit::Spades, 4),
+    };
+    auto state = *State::create(scenario);
+    EXPECT_TRUE(state.card_index_is_consistent_for_testing());
+
+    // Non-contiguous imported ids still resolve through the index.
+    ASSERT_NE(state.card(CardId{7}), nullptr);
+    EXPECT_EQ(state.card(CardId{7})->id().value, 7U);
+    EXPECT_EQ(state.card(CardId{4}), nullptr);
+
+    const Card first = state.draw_floating(Seat::North);
+    const Card second = state.draw_floating(Seat::North);
+    EXPECT_TRUE(state.card_index_is_consistent_for_testing());
+    ASSERT_NE(state.card(first.id()), nullptr);
+    ASSERT_NE(state.card(second.id()), nullptr);
+
+    state.remove_from_catalog(first.id());
+    EXPECT_TRUE(state.card_index_is_consistent_for_testing());
+    EXPECT_EQ(state.card(first.id()), nullptr);
+    ASSERT_NE(state.card(second.id()), nullptr);
+    EXPECT_EQ(state.card(second.id())->id().value, second.id().value);
+
+    state.remove_from_catalog(CardId{3});
+    EXPECT_TRUE(state.card_index_is_consistent_for_testing());
+    EXPECT_EQ(state.card(CardId{3}), nullptr);
+    ASSERT_NE(state.card(CardId{7}), nullptr);
+}
+
 }  // namespace
 }  // namespace touniu_solver

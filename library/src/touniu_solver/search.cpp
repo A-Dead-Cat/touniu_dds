@@ -33,8 +33,11 @@ auto search_depth(const Position& position) -> std::uint32_t
 
 class SearchContext {
 public:
-    SearchContext(const Partnership target, const SearchOptions options)
-        : target_(target), options_(options)
+    SearchContext(
+        const Partnership target,
+        const SearchOptions options,
+        const std::size_t buffer_count)
+        : target_(target), options_(options), action_buffers_(buffer_count)
     {
     }
 
@@ -52,10 +55,11 @@ public:
         };
         int alpha = std::numeric_limits<int>::min();
         int beta = std::numeric_limits<int>::max();
-        for (const Action& action : position.legal_actions()) {
-            if (!position.apply(action)) {
-                continue;
-            }
+        ActionList& actions = buffer(position);
+        position.legal_actions_into(actions);
+        for (std::size_t index = 0; index < actions.size(); ++index) {
+            const Action action = actions[index];
+            position.apply_known_legal(action);
             const int value = evaluate(position, alpha, beta);
             position.undo();
             if (!result.best_action.has_value() ||
@@ -78,12 +82,12 @@ public:
         if (position.is_finished()) {
             return results;
         }
-        const std::vector<Action> actions = position.legal_actions();
+        ActionList& actions = buffer(position);
+        position.legal_actions_into(actions);
         results.reserve(actions.size());
-        for (const Action& action : actions) {
-            if (!position.apply(action)) {
-                continue;
-            }
+        for (std::size_t index = 0; index < actions.size(); ++index) {
+            const Action action = actions[index];
+            position.apply_known_legal(action);
             // Every displayed action gets its own full window so sibling
             // cutoffs can never leak into its value.
             const int value = evaluate(
@@ -148,7 +152,8 @@ private:
         int best = maximizing ? std::numeric_limits<int>::min()
                               : std::numeric_limits<int>::max();
         std::optional<Action> best_action;
-        std::vector<Action> actions = position.legal_actions();
+        ActionList& actions = buffer(position);
+        position.legal_actions_into(actions);
         if (cached != nullptr && cached->best_action.has_value()) {
             const auto preferred = std::find(
                 actions.begin(), actions.end(), *cached->best_action);
@@ -157,10 +162,9 @@ private:
             }
         }
 
-        for (const Action& action : actions) {
-            if (!position.apply(action)) {
-                continue;
-            }
+        for (std::size_t index = 0; index < actions.size(); ++index) {
+            const Action action = actions[index];
+            position.apply_known_legal(action);
             const int value = evaluate(position, alpha, beta);
             position.undo();
             if (!best_action.has_value() ||
@@ -199,9 +203,15 @@ private:
         return best;
     }
 
+    auto buffer(const Position& position) -> ActionList&
+    {
+        return action_buffers_[search_depth(position)];
+    }
+
     Partnership target_;
     SearchOptions options_;
     TranspositionTable table_;
+    std::vector<ActionList> action_buffers_;
 };
 
 }  // namespace
@@ -215,7 +225,8 @@ auto solve(Position& position, Partnership target, bool use_alpha_beta)
 auto solve(Position& position, Partnership target, const SearchOptions& options)
     -> SearchResult
 {
-    SearchContext context(target, options);
+    SearchContext context(
+        target, options, static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U);
     return context.solve(position);
 }
 
@@ -233,7 +244,8 @@ auto analyze_actions(
     Partnership target,
     const SearchOptions& options) -> std::vector<ActionAnalysis>
 {
-    SearchContext context(target, options);
+    SearchContext context(
+        target, options, static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U);
     return context.analyze(position);
 }
 

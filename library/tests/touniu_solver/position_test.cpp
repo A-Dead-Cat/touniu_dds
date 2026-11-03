@@ -411,6 +411,49 @@ TEST(PositionTest, PlusTwoUndoRepeatsTheSameGeneratedCardsAfterSkippedCandidates
     }
 }
 
+void check_known_legal_tree(
+    Position& via_apply,
+    Position& direct,
+    const int depth,
+    std::size_t& visited)
+{
+    if (depth <= 0 || visited >= 300U) {
+        return;
+    }
+    const std::vector<Action> actions = via_apply.legal_actions();
+    const std::vector<Action> known = direct.legal_actions();
+    ASSERT_EQ(actions.size(), known.size());
+    for (std::size_t index = 0; index < known.size(); ++index) {
+        if (visited >= 300U) {
+            return;
+        }
+        ++visited;
+        const ObservableState before = observe(direct);
+        ASSERT_TRUE(via_apply.apply(actions[index]));
+        direct.apply_known_legal(known[index]);
+        EXPECT_TRUE(observe(via_apply) == observe(direct))
+            << "state mismatch at expanded action " << visited;
+        check_known_legal_tree(via_apply, direct, depth - 1, visited);
+        via_apply.undo();
+        direct.undo();
+        EXPECT_TRUE(observe(direct) == before)
+            << "undo mismatch at expanded action " << visited;
+    }
+}
+
+TEST(PositionTest, ApplyKnownLegalMatchesApplyForEveryAction)
+{
+    auto via_apply = Position::create(mixed_scenario());
+    auto direct = Position::create(mixed_scenario());
+    ASSERT_TRUE(via_apply.has_value());
+    ASSERT_TRUE(direct.has_value());
+
+    std::size_t visited = 0;
+    check_known_legal_tree(*via_apply, *direct, 4, visited);
+    EXPECT_GT(visited, 0U);
+    EXPECT_TRUE(observe(*via_apply) == observe(*direct));
+}
+
 TEST(PositionTest, ApplyUndoRestoresObservableStateForEveryAction)
 {
     auto position = Position::create(mixed_scenario());

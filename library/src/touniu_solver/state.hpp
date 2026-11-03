@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include <touniu_solver/card.hpp>
@@ -55,6 +56,10 @@ public:
     static void reset_copy_count_for_testing();
     [[nodiscard]] static auto copy_count_for_testing() -> std::uint64_t;
 
+    // Derived accelerator, never part of position semantics: the card index is
+    // rebuilt from the catalog in debug/test checks only.
+    [[nodiscard]] auto card_index_is_consistent_for_testing() const -> bool;
+
 private:
     friend class Position;
 
@@ -74,9 +79,14 @@ private:
 
     [[nodiscard]] auto card_id_exists(CardId id) const -> bool;
     [[nodiscard]] auto floating_template_exists(const Card& card) const -> bool;
+    void rebuild_card_index();
+    void insert_card_index(std::uint64_t id, std::size_t position);
+    void erase_card_index(std::uint64_t id, std::size_t position);
+    [[nodiscard]] auto card_position(CardId id) const -> std::size_t;
 
     std::array<std::vector<CardId>, 4> hands_;
     std::vector<Card> cards_;
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> card_index_;
     Seat next_player_;
     Direction direction_;
     Contract contract_;
