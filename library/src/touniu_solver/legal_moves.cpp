@@ -17,6 +17,12 @@ auto has_ordinary_card(const State& state, const std::vector<CardId>& hand) -> b
     });
 }
 
+auto is_multi_suit_card(const Card& card) -> bool
+{
+    return card.kind() == CardKind::FourSuit ||
+           card.kind() == CardKind::ThreeSuitCat;
+}
+
 }  // namespace
 
 Action::Action(
@@ -92,7 +98,7 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
     const bool has_led_suit = std::any_of(hand.begin(), hand.end(), [&](const CardId id) {
         const Card* card = state.card(id);
         assert(card != nullptr);
-        return std::find(
+        return !is_multi_suit_card(*card) && std::find(
                    card->intrinsic_suits().begin(),
                    card->intrinsic_suits().end(),
                    *led_suit
@@ -102,6 +108,11 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
     for (const CardId id : hand) {
         const Card* card = state.card(id);
         assert(card != nullptr);
+        if (card->kind() == CardKind::FourSuit && !has_led_suit) {
+            actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
+            actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+            continue;
+        }
         const bool matches_lead = std::find(
                                       card->intrinsic_suits().begin(),
                                       card->intrinsic_suits().end(),

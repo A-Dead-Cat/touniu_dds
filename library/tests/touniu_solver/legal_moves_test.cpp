@@ -94,5 +94,38 @@ TEST(LegalMovesTest, ThreeSuitCatCannotLeadWhileAnOrdinaryCardRemains)
     EXPECT_EQ(actions.front(), Action::play(CardId{2}, PlayMode::Lead, Suit::Hearts));
 }
 
+TEST(LegalMovesTest, FourSuitCardMayFollowOrDiscardWhenVoidInTheLedSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::four_suit(CardId{1}, Rank::integer(12)),
+        normal_card(2, Suit::Hearts, 3),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    EXPECT_EQ(actions.size(), 3U);
+    EXPECT_NE(
+        std::find(
+            actions.begin(),
+            actions.end(),
+            Action::play(CardId{1}, PlayMode::Follow, Suit::Spades)
+        ),
+        actions.end()
+    );
+    EXPECT_NE(
+        std::find(
+            actions.begin(),
+            actions.end(),
+            Action::play(CardId{1}, PlayMode::Discard, Suit::NoTrump)
+        ),
+        actions.end()
+    );
+}
+
 }  // namespace
 }  // namespace touniu_solver
