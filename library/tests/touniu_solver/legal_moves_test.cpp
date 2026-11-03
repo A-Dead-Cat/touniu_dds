@@ -152,5 +152,39 @@ TEST(LegalMovesTest, FourSuitCardMayTrumpWhenVoidInTheLedSuitUnderSuitContract)
     );
 }
 
+TEST(LegalMovesTest, FourSuitCardDoesNotCreateASeparateTrumpChoiceWhenTrumpLeads)
+{
+    Scenario scenario;
+    scenario.contract = Contract::Hearts;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::four_suit(CardId{1}, Rank::integer(12)),
+        normal_card(2, Suit::Clubs, 3),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Hearts)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    EXPECT_EQ(actions.size(), 3U);
+    EXPECT_EQ(
+        std::count(
+            actions.begin(),
+            actions.end(),
+            Action::play(CardId{1}, PlayMode::Follow, Suit::Hearts)
+        ),
+        1
+    );
+    EXPECT_EQ(
+        std::count(
+            actions.begin(),
+            actions.end(),
+            Action::play(CardId{1}, PlayMode::Trump, Suit::Hearts)
+        ),
+        0
+    );
+}
+
 }  // namespace
 }  // namespace touniu_solver

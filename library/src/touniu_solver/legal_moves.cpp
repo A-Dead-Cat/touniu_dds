@@ -128,7 +128,8 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         if (card->kind() == CardKind::FourSuit && !has_led_suit) {
             actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
             actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
-            if (const auto trump = trump_suit(state.contract()); trump.has_value()) {
+            if (const auto trump = trump_suit(state.contract());
+                trump.has_value() && *trump != *led_suit) {
                 actions.push_back(Action::play(id, PlayMode::Trump, *trump));
             }
             continue;
