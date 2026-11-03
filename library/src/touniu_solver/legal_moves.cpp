@@ -116,6 +116,8 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
 
     const std::optional<Suit> led_suit = trick.front().action.effective_suit();
     assert(led_suit.has_value());
+    const Card* lead_card = trick.front().action.is_pass()
+        ? nullptr : state.card(*trick.front().action.card_id());
     const bool has_led_suit = std::any_of(hand.begin(), hand.end(), [&](const CardId id) {
         const Card* card = state.card(id);
         assert(card != nullptr);
@@ -139,6 +141,14 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
     for (const CardId id : hand) {
         const Card* card = state.card(id);
         assert(card != nullptr);
+        if (card->kind() == CardKind::FourSuit &&
+            state.contract() == Contract::NoTrump && lead_card != nullptr &&
+            (lead_card->kind() == CardKind::BigJoker ||
+             lead_card->kind() == CardKind::SmallJoker ||
+             lead_card->kind() == CardKind::NoTrump)) {
+            actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+            continue;
+        }
         if (card->kind() == CardKind::ThreeSuitCat) {
             if (state.contract() == Contract::NoTrump) {
                 continue;
