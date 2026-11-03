@@ -39,12 +39,14 @@ State::State(
     std::vector<Card> cards,
     const Seat next_player,
     const Direction direction,
+    const Contract contract,
     const std::uint32_t tricks_remaining,
     const std::uint32_t seed)
     : hands_(std::move(hands)),
       cards_(std::move(cards)),
       next_player_(next_player),
       direction_(direction),
+      contract_(contract),
       tricks_remaining_(tricks_remaining),
       seed_(seed)
 {
@@ -75,6 +77,7 @@ auto State::create(const Scenario& scenario) -> std::optional<State>
         std::move(cards),
         scenario.next_player,
         scenario.direction,
+        scenario.contract,
         scenario.tricks_remaining,
         scenario.seed.value_or(DefaultGenerationSeed)
     );
@@ -96,6 +99,11 @@ auto State::card(const CardId id) const -> const Card*
 auto State::next_player() const -> Seat
 {
     return next_player_;
+}
+
+auto State::contract() const -> Contract
+{
+    return contract_;
 }
 
 auto State::requires_temporary_pass() const -> bool

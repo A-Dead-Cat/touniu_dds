@@ -127,5 +127,30 @@ TEST(LegalMovesTest, FourSuitCardMayFollowOrDiscardWhenVoidInTheLedSuit)
     );
 }
 
+TEST(LegalMovesTest, FourSuitCardMayTrumpWhenVoidInTheLedSuitUnderSuitContract)
+{
+    Scenario scenario;
+    scenario.contract = Contract::Hearts;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::four_suit(CardId{1}, Rank::integer(12)),
+        normal_card(2, Suit::Clubs, 3),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    EXPECT_NE(
+        std::find(
+            actions.begin(),
+            actions.end(),
+            Action::play(CardId{1}, PlayMode::Trump, Suit::Hearts)
+        ),
+        actions.end()
+    );
+}
+
 }  // namespace
 }  // namespace touniu_solver

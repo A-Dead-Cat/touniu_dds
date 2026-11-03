@@ -23,6 +23,23 @@ auto is_multi_suit_card(const Card& card) -> bool
            card.kind() == CardKind::ThreeSuitCat;
 }
 
+auto trump_suit(const Contract contract) -> std::optional<Suit>
+{
+    switch (contract) {
+        case Contract::Spades:
+            return Suit::Spades;
+        case Contract::Hearts:
+            return Suit::Hearts;
+        case Contract::Diamonds:
+            return Suit::Diamonds;
+        case Contract::Clubs:
+            return Suit::Clubs;
+        case Contract::NoTrump:
+            return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 Action::Action(
@@ -111,6 +128,9 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         if (card->kind() == CardKind::FourSuit && !has_led_suit) {
             actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
             actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+            if (const auto trump = trump_suit(state.contract()); trump.has_value()) {
+                actions.push_back(Action::play(id, PlayMode::Trump, *trump));
+            }
             continue;
         }
         const bool matches_lead = std::find(

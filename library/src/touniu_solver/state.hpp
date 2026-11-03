@@ -15,6 +15,7 @@ struct Scenario {
     std::array<std::vector<Card>, 4> hands;
     Seat next_player = Seat::West;
     Direction direction = Direction::Forward;
+    Contract contract = Contract::NoTrump;
     std::uint32_t tricks_remaining = 0;
     std::optional<std::uint32_t> seed;
 };
@@ -26,6 +27,7 @@ public:
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
     [[nodiscard]] auto next_player() const -> Seat;
+    [[nodiscard]] auto contract() const -> Contract;
     [[nodiscard]] auto requires_temporary_pass() const -> bool;
     [[nodiscard]] auto seed() const -> std::uint32_t;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;
@@ -40,6 +42,7 @@ private:
         std::vector<Card> cards,
         Seat next_player,
         Direction direction,
+        Contract contract,
         std::uint32_t tricks_remaining,
         std::uint32_t seed
     );
@@ -51,6 +54,7 @@ private:
     std::vector<Card> cards_;
     Seat next_player_;
     Direction direction_;
+    Contract contract_;
     std::uint32_t tricks_remaining_;
     std::uint32_t seed_;
     std::uint64_t draw_index_ = 0;

@@ -33,6 +33,14 @@ enum class Suit {
     NoTrump,
 };
 
+enum class Contract {
+    Spades,
+    Hearts,
+    Diamonds,
+    Clubs,
+    NoTrump,
+};
+
 enum class CardKind {
     Normal,
     Floating,
