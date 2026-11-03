@@ -25,7 +25,26 @@ auto score(const Position& position, const Partnership target) -> int
         position.tricks_won(Seat::West) + position.tricks_won(Seat::East));
 }
 
-using Cache = std::unordered_map<std::uint64_t, int>;
+enum class Bound {
+    Exact,
+    Lower,
+    Upper,
+};
+
+struct TableEntry {
+    int value;
+    std::uint32_t depth;
+    Bound bound;
+    std::optional<Action> best_action;
+};
+
+using Table = std::unordered_map<std::uint64_t, TableEntry>;
+
+auto search_depth(const Position& position) -> std::uint32_t
+{
+    return position.tricks_remaining() * 4U -
+           static_cast<std::uint32_t>(position.current_trick().size());
+}
 
 auto evaluate(
     Position& position,
@@ -33,41 +52,73 @@ auto evaluate(
     int alpha,
     int beta,
     const bool prune,
-    Cache& cache) -> int
+    Table& table) -> int
 {
     if (position.is_finished()) {
         return score(position, target);
     }
+
     const std::uint64_t key = hash_position(position);
-    if (const auto found = cache.find(key); found != cache.end()) {
-        return found->second;
+    const std::uint32_t depth = search_depth(position);
+    std::optional<Action> table_action;
+    if (const auto found = table.find(key);
+        found != table.end() && found->second.depth >= depth) {
+        const TableEntry& entry = found->second;
+        table_action = entry.best_action;
+        if (entry.bound == Bound::Exact) {
+            return entry.value;
+        }
+        if (prune && entry.bound == Bound::Lower) {
+            alpha = std::max(alpha, entry.value);
+        } else if (prune && entry.bound == Bound::Upper) {
+            beta = std::min(beta, entry.value);
+        }
+        if (prune && alpha >= beta) {
+            return entry.value;
+        }
     }
 
+    const int original_alpha = alpha;
+    const int original_beta = beta;
     const bool maximizing = partnership(position.next_player()) == target;
     int best = maximizing ? std::numeric_limits<int>::min()
                           : std::numeric_limits<int>::max();
-    bool cutoff = false;
-    for (const Action& action : position.legal_actions()) {
+    std::optional<Action> best_action;
+    std::vector<Action> actions = position.legal_actions();
+    if (table_action.has_value()) {
+        const auto preferred = std::find(actions.begin(), actions.end(), *table_action);
+        if (preferred != actions.end()) {
+            std::iter_swap(actions.begin(), preferred);
+        }
+    }
+    for (const Action& action : actions) {
         if (!position.apply(action)) {
             continue;
         }
-        const int value = evaluate(position, target, alpha, beta, prune, cache);
+        const int value = evaluate(position, target, alpha, beta, prune, table);
         position.undo();
+        if (!best_action.has_value() ||
+            (maximizing ? value > best : value < best)) {
+            best = value;
+            best_action = action;
+        }
         if (maximizing) {
-            best = std::max(best, value);
             alpha = std::max(alpha, best);
         } else {
-            best = std::min(best, value);
             beta = std::min(beta, best);
         }
         if (prune && alpha >= beta) {
-            cutoff = true;
             break;
         }
     }
-    if (!cutoff) {
-        cache.emplace(key, best);
+
+    Bound bound = Bound::Exact;
+    if (prune && best <= original_alpha) {
+        bound = Bound::Upper;
+    } else if (prune && best >= original_beta) {
+        bound = Bound::Lower;
     }
+    table.insert_or_assign(key, TableEntry{best, depth, bound, best_action});
     return best;
 }
 
@@ -80,7 +131,7 @@ auto solve(Position& position, const Partnership target, const bool use_alpha_be
         return {score(position, target), std::nullopt};
     }
 
-    Cache cache;
+    Table table;
     const bool maximizing = partnership(position.next_player()) == target;
     SearchResult result{
         maximizing ? std::numeric_limits<int>::min()
@@ -94,7 +145,7 @@ auto solve(Position& position, const Partnership target, const bool use_alpha_be
             continue;
         }
         const int value = evaluate(
-            position, target, alpha, beta, use_alpha_beta, cache);
+            position, target, alpha, beta, use_alpha_beta, table);
         position.undo();
         if (!result.best_action.has_value() ||
             (maximizing ? value > result.tricks : value < result.tricks)) {
