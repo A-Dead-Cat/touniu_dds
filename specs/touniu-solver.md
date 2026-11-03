@@ -123,12 +123,17 @@ choice when a card can legally be played.
 
 ## Key entry points
 
-- Planned: `library/src/touniu_solver/` — model, legal-move generation, trick
-  resolution, effects, state hashing and alpha-beta search.
-- Planned: `library/tests/touniu_solver/` — unit tests for legal moves and
-  resolution, plus deterministic search fixtures.
-- Planned: a new modern API and C/WASM-compatible shim. Existing `dll.h` and
-  standard DDS `SolveBoard` APIs remain unchanged.
+- `library/src/touniu_solver/api.hpp` exposes the typed C++ request/response
+  API used inside DDS.
+- `library/src/touniu_solver/c_api.h` exposes ABI version 1 as a flat,
+  allocation-free caller interface suitable for a native module or a future
+  WASM wrapper. TouniuBridge supplies exact millionth ranks and immutable card
+  IDs and receives the optimal trick count plus the best card, play mode and
+  effective suit. Unknown ABI versions and malformed cards fail explicitly.
+- The C ABI currently accepts positions at a trick boundary. Importing an
+  already-partially-played trick will be added before TouniuBridge uses the
+  solver for mid-trick advice.
+- Existing `dll.h` and standard DDS `SolveBoard` APIs remain unchanged.
 
 ## Known gaps / non-goals
 

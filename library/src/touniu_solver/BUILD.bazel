@@ -98,3 +98,15 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [":search"],
 )
+
+cc_library(
+    name = "c_api",
+    srcs = ["c_api.cpp"],
+    hdrs = ["c_api.h"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    include_prefix = "touniu_solver",
+    visibility = ["//visibility:public"],
+    deps = [":api"],
+)
