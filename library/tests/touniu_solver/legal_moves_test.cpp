@@ -301,5 +301,23 @@ TEST(LegalMovesTest, SuitTrumpTrumpsWhenVoidInLedSuit)
     EXPECT_EQ(actions.front(), Action::play(CardId{1}, PlayMode::Trump, Suit::Hearts));
 }
 
+TEST(LegalMovesTest, RealNoTrumpMustFollowBeforeFourSuitCanDiscard)
+{
+    Scenario scenario;
+    scenario.contract = Contract::NoTrump;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::West)] = {Card::big_joker(CardId{9})};
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::no_trump(CardId{1}, Rank::integer(8)),
+        Card::four_suit(CardId{2}, Rank::integer(12))};
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{9}, PlayMode::Lead, Suit::NoTrump)}};
+
+    ASSERT_TRUE(state.has_value());
+    const auto actions = legal_actions(*state, trick);
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(actions.front(), Action::play(CardId{1}, PlayMode::Follow, Suit::NoTrump));
+}
+
 }  // namespace
 }  // namespace touniu_solver

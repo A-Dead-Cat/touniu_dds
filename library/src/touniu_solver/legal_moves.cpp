@@ -173,7 +173,8 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         const Card* card = state.card(id);
         assert(card != nullptr);
         if (card->kind() == CardKind::FourSuit &&
-            state.contract() == Contract::NoTrump && lead_card != nullptr &&
+            !has_led_suit && state.contract() == Contract::NoTrump &&
+            lead_card != nullptr &&
             (lead_card->kind() == CardKind::BigJoker ||
              lead_card->kind() == CardKind::SmallJoker ||
              lead_card->kind() == CardKind::NoTrump)) {
