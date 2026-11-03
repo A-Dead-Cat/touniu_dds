@@ -50,23 +50,27 @@ auto search_depth(const Position& position) -> std::uint32_t
            static_cast<std::uint32_t>(position.current_trick().size());
 }
 
-// Flat-table capacity per deal size. The values cover the observed number of
-// distinct positions with headroom while staying well inside a wasm32 heap.
-auto transposition_slots(const std::uint32_t tricks) -> std::size_t
+// Contract solves explore far fewer nodes than per-action analysis, so their
+// table is sized by the cards in play and capped at 128 MiB. That keeps a
+// four-worker contract pool inside client memory even though the Playground
+// always requests the full 13-trick limit.
+auto transposition_slots(const Position& position) -> std::size_t
 {
-    if (tricks <= 5U) {
+    std::size_t cards = position.current_trick().size();
+    for (int seat = 0; seat < 4; ++seat) {
+        cards += position.hand(static_cast<Seat>(seat)).size();
+    }
+    const std::size_t per_seat = (cards + 3U) / 4U;
+    if (per_seat <= 5U) {
         return 1U << 15U;
     }
-    if (tricks == 6U) {
+    if (per_seat == 6U) {
         return 1U << 17U;
     }
-    if (tricks == 7U) {
+    if (per_seat == 7U) {
         return 1U << 20U;
     }
-    if (tricks == 8U) {
-        return 1U << 23U;
-    }
-    return 1U << 24U;
+    return 1U << 22U;
 }
 
 // Per-action analysis explores a much larger tree than a single contract
@@ -620,7 +624,7 @@ auto solve(Position& position, Partnership target, const SearchOptions& options)
     SearchContext context(
         options,
         static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
-        transposition_slots(position.tricks_remaining()));
+        transposition_slots(position));
     return context.solve_for(position, target);
 }
 
@@ -662,7 +666,7 @@ auto solve_contract_batch(
         const std::uint32_t tricks = query.position.tricks_remaining();
         buffer_count = std::max(
             buffer_count, static_cast<std::size_t>(tricks) * 4U + 1U);
-        table_slots = std::max(table_slots, transposition_slots(tricks));
+        table_slots = std::max(table_slots, transposition_slots(query.position));
     }
 
     // One shared table for every declarer of this deal and strain. Heuristics
