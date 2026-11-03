@@ -1,0 +1,64 @@
+#include <touniu_solver/legal_moves.hpp>
+
+#include <gtest/gtest.h>
+
+namespace touniu_solver {
+namespace {
+
+auto normal_card(const std::uint64_t id, const Suit suit, const std::int32_t rank) -> Card
+{
+    return Card::normal(CardId{id}, suit, Rank::integer(rank));
+}
+
+TEST(LegalMovesTest, RequiresNormalSuitWhenPlayerHasLedSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        normal_card(1, Suit::Spades, 2),
+        normal_card(2, Suit::Hearts, 3),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(actions.front(), Action::play(CardId{1}, PlayMode::Follow, Suit::Spades));
+}
+
+TEST(LegalMovesTest, AllowsDiscardWhenPlayerHasNoLedSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        normal_card(1, Suit::Hearts, 2),
+        normal_card(2, Suit::Diamonds, 3),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    EXPECT_EQ(actions.size(), 2U);
+    EXPECT_EQ(actions[0], Action::play(CardId{1}, PlayMode::Discard, Suit::Hearts));
+    EXPECT_EQ(actions[1], Action::play(CardId{2}, PlayMode::Discard, Suit::Diamonds));
+}
+
+TEST(LegalMovesTest, ProducesOnlyTemporaryPassForEmptyHand)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    const auto state = State::create(scenario);
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, {});
+
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_TRUE(actions.front().is_pass());
+}
+
+}  // namespace
+}  // namespace touniu_solver

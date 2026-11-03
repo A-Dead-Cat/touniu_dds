@@ -24,6 +24,8 @@ public:
     static auto create(const Scenario& scenario) -> std::optional<State>;
 
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
+    [[nodiscard]] auto card(CardId id) const -> const Card*;
+    [[nodiscard]] auto next_player() const -> Seat;
     [[nodiscard]] auto requires_temporary_pass() const -> bool;
     [[nodiscard]] auto seed() const -> std::uint32_t;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;

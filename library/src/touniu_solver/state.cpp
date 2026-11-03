@@ -85,6 +85,19 @@ auto State::hand(const Seat seat) const -> const std::vector<CardId>&
     return hands_[seat_index(seat)];
 }
 
+auto State::card(const CardId id) const -> const Card*
+{
+    const auto found = std::find_if(cards_.begin(), cards_.end(), [id](const Card& card) {
+        return card.id() == id;
+    });
+    return found == cards_.end() ? nullptr : &*found;
+}
+
+auto State::next_player() const -> Seat
+{
+    return next_player_;
+}
+
 auto State::requires_temporary_pass() const -> bool
 {
     return hand(next_player_).empty();
