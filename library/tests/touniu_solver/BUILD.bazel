@@ -69,3 +69,13 @@ cc_test(
         "@googletest//:gtest_main",
     ],
 )
+
+cc_test(
+    name = "api_test",
+    size = "small",
+    srcs = ["api_test.cpp"],
+    deps = [
+        "//library/src/touniu_solver:api",
+        "@googletest//:gtest_main",
+    ],
+)
