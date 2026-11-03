@@ -86,6 +86,9 @@ public:
     static auto big_joker(CardId id) -> Card;
     static auto small_joker(CardId id) -> Card;
     static auto plus_two(CardId id, Suit suit) -> Card;
+    static auto block(CardId id, Suit suit) -> Card;
+    static auto reverse(CardId id, Suit suit) -> Card;
+    static auto cherry_bomb(CardId id, Suit suit) -> Card;
 
     [[nodiscard]] auto id() const -> CardId;
     [[nodiscard]] auto kind() const -> CardKind;

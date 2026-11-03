@@ -104,6 +104,24 @@ auto Card::plus_two(const CardId id, const Suit suit) -> Card
     return Card(id, CardKind::PlusTwo, Rank::integer(15), {suit});
 }
 
+auto Card::block(const CardId id, const Suit suit) -> Card
+{
+    assert(is_normal_suit(suit));
+    return Card(id, CardKind::Block, Rank::integer(1), {suit});
+}
+
+auto Card::reverse(const CardId id, const Suit suit) -> Card
+{
+    assert(is_normal_suit(suit));
+    return Card(id, CardKind::Reverse, Rank::integer(1), {suit});
+}
+
+auto Card::cherry_bomb(const CardId id, const Suit suit) -> Card
+{
+    assert(is_normal_suit(suit));
+    return Card(id, CardKind::CherryBomb, *Rank::from_millionths(14'000'001), {suit});
+}
+
 auto Card::id() const -> CardId
 {
     return id_;

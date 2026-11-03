@@ -106,6 +106,11 @@ auto State::contract() const -> Contract
     return contract_;
 }
 
+auto State::direction() const -> Direction
+{
+    return direction_;
+}
+
 auto State::requires_temporary_pass() const -> bool
 {
     return hand(next_player_).empty();

@@ -28,6 +28,7 @@ public:
     [[nodiscard]] auto card(CardId id) const -> const Card*;
     [[nodiscard]] auto next_player() const -> Seat;
     [[nodiscard]] auto contract() const -> Contract;
+    [[nodiscard]] auto direction() const -> Direction;
     [[nodiscard]] auto requires_temporary_pass() const -> bool;
     [[nodiscard]] auto seed() const -> std::uint32_t;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;

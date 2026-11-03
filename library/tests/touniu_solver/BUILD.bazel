@@ -11,6 +11,16 @@ cc_test(
 )
 
 cc_test(
+    name = "trick_resolution_test",
+    size = "small",
+    srcs = ["trick_resolution_test.cpp"],
+    deps = [
+        "//library/src/touniu_solver:trick_resolution",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "legal_moves_test",
     size = "small",
     srcs = ["legal_moves_test.cpp"],

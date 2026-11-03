@@ -13,6 +13,18 @@ cc_library(
 )
 
 cc_library(
+    name = "trick_resolution",
+    srcs = ["trick_resolution.cpp"],
+    hdrs = ["trick_resolution.hpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    include_prefix = "touniu_solver",
+    visibility = ["//visibility:public"],
+    deps = [":legal_moves"],
+)
+
+cc_library(
     name = "legal_moves",
     srcs = ["legal_moves.cpp"],
     hdrs = ["legal_moves.hpp"],
