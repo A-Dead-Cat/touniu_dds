@@ -120,10 +120,22 @@ choice when a card can legally be played.
   displayed actions. Entries are keyed by a primary identity and accepted only
   when a second independent verifier matches; a collision is rejected, never
   merged.
-- Every displayed action is evaluated from its own full
-  `(-infinity, +infinity)` window. Alpha-beta and stored bounds are internal to
-  the search; sibling cutoffs never narrow another action's window, and only an
-  exact result is reported as that action's value.
+- Every displayed action is evaluated from its own full natural window. Values
+  are bounded by the target partnership's current wins and that plus the
+  remaining tricks; internal results are classified as exact, lower or upper,
+  alpha-beta and stored bounds stay internal to the search, sibling cutoffs never
+  narrow another action's window, and only an exact result is reported as that
+  action's value.
+- Interior nodes use PVS over a deterministic move order (table best action,
+  then the ply's main-variation action, then the two killers, then the canonical
+  legal order). Per-action analysis converges with MTD(f) null-window probes.
+  Ordering, history and bounds never change which legal actions exist, and an
+  equal-valued tie still resolves to the earliest canonical action.
+- Interior nodes may merge two plain cards that are indistinguishable for every
+  remaining comparison: same single ordinary suit, same mode and effective suit,
+  and no plain card in any hand or in the current trick with a rank strictly
+  between them. Any special, multi-suit or `+2` card that can still participate
+  disables the merge. The analysis root always reports every legal action.
 - The position identity used by the table is maintained incrementally from
   applied and undone actions and includes each seat's own win count. Positions
   that differ only in which partner won an earlier trick are therefore not
