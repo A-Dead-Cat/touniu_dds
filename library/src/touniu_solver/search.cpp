@@ -69,6 +69,35 @@ auto transposition_slots(const std::uint32_t tricks) -> std::size_t
     return 1U << 24U;
 }
 
+// Per-action analysis explores a much larger tree than a single contract
+// solve, so its table is sized by the cards actually in play (not by the trick
+// limit, which can exceed the dealt cards in the Playground) and grows to a
+// 2^25-slot cap for ten or more cards per seat.
+auto analysis_transposition_slots(const Position& position) -> std::size_t
+{
+    std::size_t cards = position.current_trick().size();
+    for (int seat = 0; seat < 4; ++seat) {
+        cards += position.hand(static_cast<Seat>(seat)).size();
+    }
+    const std::size_t per_seat = (cards + 3U) / 4U;
+    if (per_seat <= 5U) {
+        return 1U << 15U;
+    }
+    if (per_seat == 6U) {
+        return 1U << 17U;
+    }
+    if (per_seat == 7U) {
+        return 1U << 20U;
+    }
+    if (per_seat == 8U) {
+        return 1U << 23U;
+    }
+    if (per_seat == 9U) {
+        return 1U << 24U;
+    }
+    return 1U << 25U;
+}
+
 auto is_plain_card(const Card& card) -> bool
 {
     return (card.kind() == CardKind::Normal || card.kind() == CardKind::Floating) &&
@@ -613,7 +642,7 @@ auto analyze_actions(
     SearchContext context(
         options,
         static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
-        transposition_slots(position.tricks_remaining()));
+        analysis_transposition_slots(position));
     return context.analyze(position, target);
 }
 
