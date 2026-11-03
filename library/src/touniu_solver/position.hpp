@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <touniu_solver/legal_moves.hpp>
+#include <touniu_solver/position_identity.hpp>
 #include <touniu_solver/state.hpp>
 
 namespace touniu_solver {
@@ -39,7 +40,13 @@ public:
     [[nodiscard]] auto valid_reverse_count() const -> std::uint32_t;
     [[nodiscard]] auto pending_block() const -> std::optional<Seat>;
 
+    // Identity maintained incrementally alongside every mutation. It always
+    // equals recompute_position_identity(), which stays as the test oracle.
+    [[nodiscard]] auto identity() const -> const PositionIdentity&;
+
 private:
+    friend auto recompute_position_identity(const Position& position)
+        -> PositionIdentity;
     // Only the data an action can change is recorded, so search can undo in
     // place instead of copying the whole deal state at every node.
     struct UndoRecord {
@@ -54,6 +61,7 @@ private:
         std::optional<Seat> previous_pending_block;
         std::uint32_t previous_valid_reverse_count = 0;
         std::array<std::uint32_t, 4> previous_tricks_won{};
+        PositionIdentity previous_identity;
         Seat draw_target = Seat::West;
         std::vector<CardId> drawn_cards;
         bool completed_trick = false;
@@ -67,12 +75,30 @@ private:
     void apply_play(const Action& action, UndoRecord& record);
     void finish_trick(Trick* cleared_trick);
 
+    void set_next_player(Seat seat);
+    void set_direction(Direction direction);
+    void set_tricks_remaining(std::uint32_t tricks_remaining);
+    void set_pending_block(std::optional<Seat> seat);
+    void set_valid_reverse_count(std::uint32_t count);
+    void add_tricks_won(Seat seat);
+    void push_trick_play(const TrickPlay& play);
+    void clear_trick();
+    void remove_hand_card(Seat seat, CardId id);
+    auto draw_floating(Seat seat) -> Card;
+    [[nodiscard]] auto identity_input() const -> identity_tokens::IdentityInput;
+    void refresh_identity();
+
     State state_;
     Trick current_trick_;
     std::optional<Seat> pending_block_;
     std::uint32_t valid_reverse_count_ = 0;
     std::array<std::uint32_t, 4> tricks_won_{};
+    PositionIdentity identity_;
     std::vector<UndoRecord> undo_stack_;
 };
+
+// Reference identity recomputed from the complete position. The maintained
+// Position::identity() must always equal it; tests use this as the oracle.
+auto recompute_position_identity(const Position& position) -> PositionIdentity;
 
 }  // namespace touniu_solver

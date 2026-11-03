@@ -147,5 +147,37 @@ TEST(PositionIdentityTest, RetiredCatalogCardsAffectIdentity)
         recompute_position_identity(current));
 }
 
+TEST(PositionIdentityTest, WinCountsAreSeatSensitive)
+{
+    LivePosition base;
+    base.cards = {
+        Card::normal(CardId{1}, Suit::Spades, Rank::integer(14)),
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(13)),
+        Card::normal(CardId{3}, Suit::Spades, Rank::integer(12)),
+        Card::normal(CardId{4}, Suit::Spades, Rank::integer(11)),
+    };
+    base.hands[static_cast<int>(Seat::West)] = {CardId{1}};
+    base.hands[static_cast<int>(Seat::North)] = {CardId{2}};
+    base.hands[static_cast<int>(Seat::East)] = {CardId{3}};
+    base.hands[static_cast<int>(Seat::South)] = {CardId{4}};
+    base.next_player = Seat::West;
+    base.contract = Contract::NoTrump;
+    base.tricks_remaining = 2;
+    base.tricks_won = {1, 0, 0, 0};
+
+    LivePosition moved = base;
+    moved.tricks_won = {0, 0, 1, 0};
+
+    auto west_won = Position::create(base);
+    auto east_won = Position::create(moved);
+    ASSERT_TRUE(west_won.has_value());
+    ASSERT_TRUE(east_won.has_value());
+    // Same multiset of win counts, different owning seat: the identity must
+    // still separate them, because the score depends on who won the trick.
+    EXPECT_NE(
+        recompute_position_identity(*west_won),
+        recompute_position_identity(*east_won));
+}
+
 }  // namespace
 }  // namespace touniu_solver

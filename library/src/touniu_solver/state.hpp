@@ -25,6 +25,7 @@ public:
     static auto create(const Scenario& scenario) -> std::optional<State>;
 
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
+    [[nodiscard]] auto hands() const -> const std::array<std::vector<CardId>, 4>&;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
     [[nodiscard]] auto cards() const -> const std::vector<Card>&;
     [[nodiscard]] auto next_player() const -> Seat;

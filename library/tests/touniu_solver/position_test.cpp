@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include <touniu_solver/live_position.hpp>
 #include <touniu_solver/position_hash.hpp>
 #include <touniu_solver/state.hpp>
 
@@ -286,6 +287,11 @@ auto observe(const Position& position) -> ObservableState
     return observed;
 }
 
+auto expect_identity_parity(const Position& position) -> void
+{
+    EXPECT_TRUE(position.identity() == recompute_position_identity(position));
+}
+
 auto mixed_scenario() -> Scenario
 {
     Scenario scenario;
@@ -336,6 +342,7 @@ void check_undo_tree(
         ++visited;
         const ObservableState before = observe(position);
         ASSERT_TRUE(position.apply(action));
+        expect_identity_parity(position);
         for (const Card& card : position.card_catalog()) {
             if (card.kind() == CardKind::Floating) {
                 saw_floating = true;
@@ -343,6 +350,7 @@ void check_undo_tree(
         }
         check_undo_tree(position, depth - 1, visited, saw_floating);
         position.undo();
+        expect_identity_parity(position);
         EXPECT_TRUE(observe(position) == before)
             << "restore mismatch after " << visited << " expanded actions";
     }
@@ -438,14 +446,67 @@ TEST(PositionTest, RandomApplyUndoSequenceRestoresEveryStep)
         snapshots.push_back(observe(*position));
         const Action& action = actions[next_random() % actions.size()];
         ASSERT_TRUE(position->apply(action));
+        expect_identity_parity(*position);
     }
     ASSERT_GE(snapshots.size(), 4U);
 
     while (!snapshots.empty()) {
         position->undo();
+        expect_identity_parity(*position);
         EXPECT_TRUE(observe(*position) == snapshots.back());
         snapshots.pop_back();
     }
+}
+
+TEST(PositionTest, MaintainedIdentityMatchesReferenceForImportedLivePosition)
+{
+    LivePosition live;
+    live.cards = {
+        normal_card(1, Suit::Spades, 14),
+        normal_card(2, Suit::Spades, 13),
+        normal_card(3, Suit::Hearts, 12),
+        normal_card(4, Suit::Clubs, 11),
+    };
+    live.hands[static_cast<std::size_t>(Seat::East)] = {CardId{3}};
+    live.hands[static_cast<std::size_t>(Seat::South)] = {CardId{4}};
+    live.current_trick = {
+        {Seat::West, false, CardId{1}, PlayMode::Lead, Suit::Spades},
+        {Seat::North, false, CardId{2}, PlayMode::Follow, Suit::Spades},
+    };
+    live.next_player = Seat::East;
+    live.contract = Contract::Spades;
+    live.tricks_remaining = 3;
+    live.tricks_won = {2, 1, 0, 4};
+
+    auto position = Position::create(live);
+    ASSERT_TRUE(position.has_value());
+    expect_identity_parity(*position);
+
+    const std::vector<Action> actions = position->legal_actions();
+    ASSERT_FALSE(actions.empty());
+    ASSERT_TRUE(position->apply(actions.front()));
+    expect_identity_parity(*position);
+    position->undo();
+    expect_identity_parity(*position);
+}
+
+TEST(PositionTest, MaintainedIdentityMatchesReferenceAtConstruction)
+{
+    auto position = Position::create(mixed_scenario());
+    ASSERT_TRUE(position.has_value());
+    expect_identity_parity(*position);
+
+    Scenario single;
+    single.tricks_remaining = 1;
+    single.next_player = Seat::South;
+    single.direction = Direction::Reverse;
+    single.contract = Contract::Hearts;
+    single.seed = 42U;
+    single.hands[static_cast<int>(Seat::South)] = {normal_card(7, Suit::Hearts, 10)};
+    single.hands[static_cast<int>(Seat::West)] = {normal_card(8, Suit::Clubs, 2)};
+    auto simple = Position::create(single);
+    ASSERT_TRUE(simple.has_value());
+    expect_identity_parity(*simple);
 }
 
 }  // namespace

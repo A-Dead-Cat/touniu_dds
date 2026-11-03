@@ -81,6 +81,7 @@ auto matches_live_position(const Position& position, const LivePosition& live) -
 
 Position::Position(State state) : state_(std::move(state))
 {
+    refresh_identity();
 }
 
 auto Position::create(const Scenario& scenario) -> std::optional<Position>
@@ -142,6 +143,7 @@ auto Position::create(const LivePosition& live) -> std::optional<Position>
     if (!matches_live_position(replay, live)) {
         return std::nullopt;
     }
+    replay.refresh_identity();
     replay.undo_stack_.clear();
     return replay;
 }
@@ -216,6 +218,39 @@ auto Position::pending_block() const -> std::optional<Seat>
     return pending_block_;
 }
 
+auto Position::identity() const -> const PositionIdentity&
+{
+    return identity_;
+}
+
+auto Position::identity_input() const -> identity_tokens::IdentityInput
+{
+    identity_tokens::IdentityInput input;
+    input.next_player = state_.next_player();
+    input.direction = state_.direction();
+    input.contract = state_.contract();
+    input.tricks_remaining = state_.tricks_remaining();
+    input.seed = state_.seed();
+    input.draw_index = state_.draw_index();
+    input.valid_reverse_count = valid_reverse_count_;
+    input.pending_block = pending_block_;
+    input.hands = &state_.hands();
+    input.tricks_won = &tricks_won_;
+    input.catalog = &state_.cards();
+    input.current_trick = &current_trick_;
+    return input;
+}
+
+void Position::refresh_identity()
+{
+    identity_ = identity_tokens::build_identity(identity_input());
+}
+
+auto recompute_position_identity(const Position& position) -> PositionIdentity
+{
+    return identity_tokens::build_identity(position.identity_input());
+}
+
 auto Position::next_seat(const Seat seat) const -> Seat
 {
     const int value = static_cast<int>(seat);
@@ -243,6 +278,7 @@ auto Position::apply(const Action& action) -> bool
     }
 
     UndoRecord record;
+    record.previous_identity = identity_;
     record.player = state_.next_player();
     record.previous_next_player = record.player;
     record.previous_direction = state_.direction();
@@ -304,6 +340,7 @@ void Position::undo()
     pending_block_ = record.previous_pending_block;
     valid_reverse_count_ = record.previous_valid_reverse_count;
     tricks_won_ = record.previous_tricks_won;
+    identity_ = record.previous_identity;
 
     undo_stack_.pop_back();
 }
@@ -311,13 +348,13 @@ void Position::undo()
 void Position::apply_pass(UndoRecord& record)
 {
     const Seat player = state_.next_player();
-    current_trick_.push_back({player, Action::pass()});
-    pending_block_ = std::nullopt;
+    push_trick_play({player, Action::pass()});
+    set_pending_block(std::nullopt);
 
     if (current_trick_.size() == 4U) {
         finish_trick(&record.cleared_trick);
     } else {
-        state_.set_next_player(next_seat(player));
+        set_next_player(next_seat(player));
     }
 }
 
@@ -330,26 +367,26 @@ void Position::apply_play(const Action& action, UndoRecord& record)
     const bool is_fourth = current_trick_.size() == 3U;
     const bool effect_valid = action.mode() != PlayMode::Discard;
 
-    state_.remove_from_hand(player, card_id);
-    current_trick_.push_back({player, action});
+    remove_hand_card(player, card_id);
+    push_trick_play({player, action});
 
     if (is_effect_card(card->kind()) && effect_valid) {
         if (card->kind() == CardKind::Block && !is_fourth) {
-            pending_block_ = next_seat(player);
+            set_pending_block(next_seat(player));
         } else if (card->kind() == CardKind::Reverse) {
-            ++valid_reverse_count_;
+            set_valid_reverse_count(valid_reverse_count_ + 1U);
         } else if (card->kind() == CardKind::PlusTwo) {
             const Seat target = is_fourth ? current_trick_.front().seat : next_seat(player);
             record.draw_target = target;
-            record.drawn_cards.push_back(state_.draw_floating(target).id());
-            record.drawn_cards.push_back(state_.draw_floating(target).id());
+            record.drawn_cards.push_back(draw_floating(target).id());
+            record.drawn_cards.push_back(draw_floating(target).id());
         }
     }
 
     if (current_trick_.size() == 4U) {
         finish_trick(&record.cleared_trick);
     } else {
-        state_.set_next_player(next_seat(player));
+        set_next_player(next_seat(player));
     }
 }
 
@@ -359,20 +396,170 @@ void Position::finish_trick(Trick* cleared_trick)
         *cleared_trick = current_trick_;
     }
     const TrickResult result = resolve_trick(state_, current_trick_);
-    ++tricks_won_[seat_index(result.winner)];
-    state_.complete_trick();
+    add_tricks_won(result.winner);
+    if (state_.tricks_remaining() > 0) {
+        set_tricks_remaining(state_.tricks_remaining() - 1U);
+    }
 
     if (valid_reverse_count_ % 2U == 1U) {
-        state_.set_direction(
+        set_direction(
             state_.direction() == Direction::Forward
                 ? Direction::Reverse : Direction::Forward
         );
     }
 
-    state_.set_next_player(result.winner);
+    set_next_player(result.winner);
+    clear_trick();
+    set_pending_block(std::nullopt);
+    set_valid_reverse_count(0);
+}
+
+void Position::set_next_player(const Seat seat)
+{
+    const Seat previous = state_.next_player();
+    if (previous == seat) {
+        return;
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainNextPlayer,
+        static_cast<std::uint64_t>(previous));
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainNextPlayer,
+        static_cast<std::uint64_t>(seat));
+    state_.set_next_player(seat);
+}
+
+void Position::set_direction(const Direction direction)
+{
+    const Direction previous = state_.direction();
+    if (previous == direction) {
+        return;
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainDirection,
+        static_cast<std::uint64_t>(previous));
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainDirection,
+        static_cast<std::uint64_t>(direction));
+    state_.set_direction(direction);
+}
+
+void Position::set_tricks_remaining(const std::uint32_t tricks_remaining)
+{
+    const std::uint32_t previous = state_.tricks_remaining();
+    if (previous == tricks_remaining) {
+        return;
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainTricksRemaining, previous);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainTricksRemaining, tricks_remaining);
+    state_.set_tricks_remaining(tricks_remaining);
+}
+
+void Position::set_pending_block(const std::optional<Seat> seat)
+{
+    if (pending_block_ == seat) {
+        return;
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainPendingBlock,
+        pending_block_.has_value()
+            ? static_cast<std::uint64_t>(*pending_block_) + 1U : 0U);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainPendingBlock,
+        seat.has_value() ? static_cast<std::uint64_t>(*seat) + 1U : 0U);
+    pending_block_ = seat;
+}
+
+void Position::set_valid_reverse_count(const std::uint32_t count)
+{
+    if (valid_reverse_count_ == count) {
+        return;
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainValidReverseCount, valid_reverse_count_);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainValidReverseCount, count);
+    valid_reverse_count_ = count;
+}
+
+void Position::add_tricks_won(const Seat seat)
+{
+    const std::size_t index = seat_index(seat);
+    const std::uint64_t seat_bits = static_cast<std::uint64_t>(index) << 32U;
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainSeatWins, seat_bits | tricks_won_[index]);
+    ++tricks_won_[index];
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainSeatWins, seat_bits | tricks_won_[index]);
+}
+
+void Position::push_trick_play(const TrickPlay& play)
+{
+    const std::uint64_t previous_size = current_trick_.size();
+    current_trick_.push_back(play);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainTrickSize, previous_size);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainTrickSize, previous_size + 1U);
+    identity_tokens::combine_trick_play(identity_, previous_size, play);
+}
+
+void Position::clear_trick()
+{
+    if (current_trick_.empty()) {
+        return;
+    }
+    for (std::uint64_t index = 0; index < current_trick_.size(); ++index) {
+        // Replaying a slot token removes it, since components are XORed.
+        identity_tokens::combine_trick_play(identity_, index, current_trick_[index]);
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainTrickSize, current_trick_.size());
+    identity_tokens::combine(identity_, identity_tokens::DomainTrickSize, 0U);
     current_trick_.clear();
-    pending_block_ = std::nullopt;
-    valid_reverse_count_ = 0;
+}
+
+void Position::remove_hand_card(const Seat seat, const CardId id)
+{
+    const std::size_t index = seat_index(seat);
+    const std::uint64_t seat_bits = static_cast<std::uint64_t>(index) << 32U;
+    const std::size_t previous_size = state_.hand(seat).size();
+    if (!state_.remove_from_hand(seat, id)) {
+        return;
+    }
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainHandSize, seat_bits | previous_size);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainHandSize, seat_bits | (previous_size - 1U));
+    identity_tokens::combine_hand_card(identity_, index, id);
+}
+
+auto Position::draw_floating(const Seat seat) -> Card
+{
+    const std::size_t index = seat_index(seat);
+    const std::uint64_t seat_bits = static_cast<std::uint64_t>(index) << 32U;
+    const std::uint64_t previous_draw_index = state_.draw_index();
+    const std::size_t previous_size = state_.hand(seat).size();
+    const std::size_t previous_catalog = state_.cards().size();
+    const Card card = state_.draw_floating(seat);
+
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainDrawIndex, previous_draw_index);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainDrawIndex, state_.draw_index());
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainHandSize, seat_bits | previous_size);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainHandSize, seat_bits | (previous_size + 1U));
+    identity_tokens::combine_hand_card(identity_, index, card.id());
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainCatalogSize, previous_catalog);
+    identity_tokens::combine(
+        identity_, identity_tokens::DomainCatalogSize, previous_catalog + 1U);
+    identity_tokens::combine_card(identity_, card);
+    return card;
 }
 
 }  // namespace touniu_solver

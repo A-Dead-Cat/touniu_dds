@@ -132,6 +132,11 @@ auto State::hand(const Seat seat) const -> const std::vector<CardId>&
     return hands_[seat_index(seat)];
 }
 
+auto State::hands() const -> const std::array<std::vector<CardId>, 4>&
+{
+    return hands_;
+}
+
 auto State::card(const CardId id) const -> const Card*
 {
     const auto found = std::find_if(cards_.begin(), cards_.end(), [id](const Card& card) {

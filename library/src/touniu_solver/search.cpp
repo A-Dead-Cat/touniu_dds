@@ -6,8 +6,6 @@
 #include <utility>
 #include <vector>
 
-#include <touniu_solver/position_hash.hpp>
-
 namespace touniu_solver {
 namespace {
 
@@ -109,7 +107,7 @@ private:
         }
 
         const std::uint32_t depth = search_depth(position);
-        const PositionIdentity identity = recompute_position_identity(position);
+        const PositionIdentity identity = position.identity();
         const int caller_alpha = alpha;
         const int caller_beta = beta;
         const bool prune = options_.use_alpha_beta;

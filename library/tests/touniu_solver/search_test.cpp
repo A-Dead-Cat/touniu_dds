@@ -3,7 +3,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace touniu_solver {
 namespace {
@@ -209,6 +212,60 @@ TEST(SearchTest, SharedActionAnalysisHandlesPartialTricksAndEffects)
         EXPECT_EQ(analysis.final_tricks, oracle(forced, Partnership::NorthSouth));
     }
     EXPECT_EQ(position.current_trick().size(), 1U);
+}
+
+TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
+{
+    // 16 normal cards: four ranks in four suits, dealt four per seat. Different
+    // play orders reach positions whose only difference is which seat of a
+    // partnership won earlier tricks, so this also exercises the win-count
+    // component of the maintained identity.
+    constexpr std::array<Suit, 4> suits = {
+        Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs};
+    constexpr std::array<int, 4> ranks = {14, 13, 12, 11};
+
+    std::uint32_t random_state = 0x9E3779B9U;
+    const auto next_random = [&random_state]() {
+        random_state ^= random_state << 13U;
+        random_state ^= random_state >> 17U;
+        random_state ^= random_state << 5U;
+        return random_state;
+    };
+
+    for (int deal_index = 0; deal_index < 4; ++deal_index) {
+        std::vector<Card> deck;
+        std::uint64_t id = 1;
+        for (const Suit suit : suits) {
+            for (const int rank : ranks) {
+                deck.push_back(Card::normal(CardId{id++}, suit, Rank::integer(rank)));
+            }
+        }
+        for (std::size_t index = deck.size() - 1; index > 0; --index) {
+            std::swap(deck[index], deck[next_random() % (index + 1)]);
+        }
+
+        Scenario scenario;
+        scenario.next_player = Seat::West;
+        scenario.contract = Contract::NoTrump;
+        scenario.tricks_remaining = 4;
+        for (std::size_t seat = 0; seat < 4; ++seat) {
+            for (std::size_t card = 0; card < 4; ++card) {
+                scenario.hands[seat].push_back(deck[seat * 4 + card]);
+            }
+        }
+
+        auto position = *Position::create(scenario);
+        const std::vector<ActionAnalysis> analyses = analyze_actions(
+            position, Partnership::NorthSouth, SearchOptions{true, true, nullptr});
+
+        ASSERT_FALSE(analyses.empty());
+        for (const ActionAnalysis& analysis : analyses) {
+            auto forced = *Position::create(scenario);
+            ASSERT_TRUE(forced.apply(analysis.action));
+            EXPECT_EQ(analysis.final_tricks, oracle(forced, Partnership::NorthSouth))
+                << "deal " << deal_index;
+        }
+    }
 }
 
 }  // namespace
