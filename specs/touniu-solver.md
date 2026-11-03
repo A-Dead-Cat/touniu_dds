@@ -71,8 +71,8 @@ choice when a card can legally be played.
   no real led-suit card. Under an NT contract it is a downgraded four-suit card
   of rank `0.999999`; while a holder owns it, that holder cannot discard on a
   normal suit and must play the cat when void in that suit.
-- `🚫` and `🔄` are valid only when played as follow or trump, never as a
-  discard. `+2`, NT cards, jokers and cherry bombs otherwise use their defined
+- `🚫`, `🔄` and `+2` are valid only when played as follow or trump, never as a
+  discard. NT cards, jokers and cherry bombs otherwise use their defined
   intrinsic suit/rank rules.
 
 ## Trick resolution and effects
@@ -95,11 +95,11 @@ choice when a card can legally be played.
 - A valid `🔄` increments this trick's effective-reverse count. When the trick
   is collected, an odd count reverses direction before the next lead. A
   discarded `🔄` does not count.
-- A `+2` immediately adds two deterministically generated floating cards to
-  the next seat in the current direction, regardless of who later wins the
-  trick. In particular, a fourth-hand `+2` draws for that trick's first seat;
-  the draw occurs before winner determination and before the next trick is
-  led.
+- A valid `+2` immediately adds two deterministically generated floating cards
+  to the next seat in the current direction, regardless of who later wins the
+  trick. In particular, a fourth-hand valid `+2` draws for that trick's first
+  seat; the draw occurs before winner determination and before the next trick
+  is led. A discarded `+2` has no effect.
 
 ## Search and transpositions
 
