@@ -1,74 +1,107 @@
 #include "position_hash.hpp"
 
 #include <algorithm>
-#include <vector>
+#include <cstdint>
 
 namespace touniu_solver {
 namespace {
 
-constexpr std::uint64_t FnvOffset = 14695981039346656037ULL;
-constexpr std::uint64_t FnvPrime = 1099511628211ULL;
+constexpr std::uint64_t PrimarySeed = 0x243F6A8885A308D3ULL;
+constexpr std::uint64_t VerifierSeed = 0x13198A2E03707344ULL;
+constexpr std::uint64_t TokenIncrement = 0x9E3779B97F4A7C15ULL;
+constexpr std::uint64_t TokenMultiplierOne = 0xBF58476D1CE4E5B9ULL;
+constexpr std::uint64_t TokenMultiplierTwo = 0x94D049BB133111EBULL;
 
-void mix(std::uint64_t& hash, const std::uint64_t value)
+// Domain-separated component token. XORing tokens makes catalog and hand
+// membership order-independent while trick slots stay ordered through their
+// explicit index domain.
+auto token(
+    const std::uint64_t seed,
+    const std::uint64_t domain,
+    const std::uint64_t value) -> std::uint64_t
 {
-    hash ^= value;
-    hash *= FnvPrime;
+    std::uint64_t mixed = seed + domain * TokenIncrement + value;
+    mixed = (mixed ^ (mixed >> 30U)) * TokenMultiplierOne;
+    mixed = (mixed ^ (mixed >> 27U)) * TokenMultiplierTwo;
+    return mixed ^ (mixed >> 31U);
 }
 
-void mix_card(std::uint64_t& hash, const Position& position, const CardId id)
+void combine(
+    PositionIdentity& identity,
+    const std::uint64_t domain,
+    const std::uint64_t value)
 {
-    mix(hash, id.value);
-    const Card* card = position.card(id);
-    if (card == nullptr) {
-        return;
-    }
-    mix(hash, static_cast<std::uint64_t>(card->kind()));
-    mix(hash, static_cast<std::uint64_t>(card->rank().millionths()));
-    mix(hash, card->intrinsic_suits().size());
-    for (const Suit suit : card->intrinsic_suits()) {
-        mix(hash, static_cast<std::uint64_t>(suit));
+    identity.primary ^= token(PrimarySeed, domain, value);
+    identity.verifier ^= token(VerifierSeed, domain, value);
+}
+
+void combine_card(PositionIdentity& identity, const Card& card)
+{
+    combine(identity, 100U, card.id().value);
+    combine(identity, 101U, static_cast<std::uint64_t>(card.kind()));
+    combine(identity, 102U, static_cast<std::uint64_t>(card.rank().millionths()));
+    combine(identity, 103U, card.intrinsic_suits().size());
+    for (const Suit suit : card.intrinsic_suits()) {
+        combine(identity, 104U, static_cast<std::uint64_t>(suit));
     }
 }
 
 }  // namespace
 
-auto hash_position(const Position& position) -> std::uint64_t
+auto recompute_position_identity(const Position& position) -> PositionIdentity
 {
-    std::uint64_t hash = FnvOffset;
-    mix(hash, static_cast<std::uint64_t>(position.next_player()));
-    mix(hash, static_cast<std::uint64_t>(position.direction()));
-    mix(hash, static_cast<std::uint64_t>(position.contract()));
-    mix(hash, position.tricks_remaining());
-    mix(hash, position.seed());
-    mix(hash, position.draw_index());
-    mix(hash, position.valid_reverse_count());
-    mix(hash, position.pending_block().has_value() ?
-        static_cast<std::uint64_t>(*position.pending_block()) + 1U : 0U);
+    PositionIdentity identity;
+
+    combine(identity, 1U, static_cast<std::uint64_t>(position.next_player()));
+    combine(identity, 2U, static_cast<std::uint64_t>(position.direction()));
+    combine(identity, 3U, static_cast<std::uint64_t>(position.contract()));
+    combine(identity, 4U, position.tricks_remaining());
+    combine(identity, 5U, position.seed());
+    combine(identity, 6U, position.draw_index());
+    combine(identity, 7U, position.valid_reverse_count());
+    combine(identity, 8U, position.pending_block().has_value()
+        ? static_cast<std::uint64_t>(*position.pending_block()) + 1U : 0U);
 
     for (int seat_value = 0; seat_value < 4; ++seat_value) {
         const Seat seat = static_cast<Seat>(seat_value);
-        mix(hash, position.tricks_won(seat));
-        std::vector<CardId> hand = position.hand(seat);
-        std::sort(hand.begin(), hand.end(), [](const CardId left, const CardId right) {
-            return left.value < right.value;
-        });
-        mix(hash, hand.size());
+        combine(identity, 10U, seat_value);
+        combine(identity, 11U, position.tricks_won(seat));
+        const std::vector<CardId>& hand = position.hand(seat);
+        combine(identity, 12U, hand.size());
         for (const CardId id : hand) {
-            mix_card(hash, position, id);
+            combine(identity, 13U, static_cast<std::uint64_t>(seat_value) << 32U | id.value);
+            // Membership must include the card definition as well, so a catalog
+            // change with an unchanged ID still changes the identity.
         }
     }
 
-    mix(hash, position.current_trick().size());
-    for (const TrickPlay& play : position.current_trick()) {
-        mix(hash, static_cast<std::uint64_t>(play.seat));
-        mix(hash, play.action.is_pass() ? 0U : 1U);
-        if (!play.action.is_pass()) {
-            mix_card(hash, position, *play.action.card_id());
-            mix(hash, static_cast<std::uint64_t>(*play.action.mode()));
-            mix(hash, static_cast<std::uint64_t>(*play.action.effective_suit()));
-        }
+    // The complete catalog participates, including cards no longer in any hand
+    // (for example a floating card already played in a collected trick). This
+    // keeps future +2 generation and the transposition key aligned.
+    combine(identity, 20U, position.card_catalog().size());
+    for (const Card& card : position.card_catalog()) {
+        combine_card(identity, card);
     }
-    return hash;
+
+    combine(identity, 30U, position.current_trick().size());
+    std::uint64_t index = 0;
+    for (const TrickPlay& play : position.current_trick()) {
+        combine(identity, 31U, index * 8U + static_cast<std::uint64_t>(play.seat));
+        combine(identity, 32U, play.action.is_pass() ? 0U : 1U);
+        if (!play.action.is_pass()) {
+            combine(identity, 33U, play.action.card_id()->value);
+            combine(identity, 34U, static_cast<std::uint64_t>(*play.action.mode()));
+            combine(identity, 35U, static_cast<std::uint64_t>(*play.action.effective_suit()));
+        }
+        ++index;
+    }
+
+    return identity;
+}
+
+auto hash_position(const Position& position) -> std::uint64_t
+{
+    return recompute_position_identity(position).primary;
 }
 
 }  // namespace touniu_solver

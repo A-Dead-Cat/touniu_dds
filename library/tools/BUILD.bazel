@@ -1,0 +1,11 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("//:CPPVARIABLES.bzl", "DDS_CPPOPTS", "DDS_LOCAL_DEFINES", "DDS_LINKOPTS")
+
+cc_binary(
+    name = "touniu_solver_benchmark",
+    srcs = ["touniu_solver_benchmark.cpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    deps = ["//library/src/touniu_solver:search"],
+)

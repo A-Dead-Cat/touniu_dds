@@ -33,6 +33,7 @@ public:
     [[nodiscard]] auto current_trick() const -> const Trick&;
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
+    [[nodiscard]] auto card_catalog() const -> const std::vector<Card>&;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;
     [[nodiscard]] auto seed() const -> std::uint32_t;
     [[nodiscard]] auto valid_reverse_count() const -> std::uint32_t;

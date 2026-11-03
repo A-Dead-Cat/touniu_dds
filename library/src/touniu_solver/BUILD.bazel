@@ -88,6 +88,20 @@ cc_library(
 )
 
 cc_library(
+    name = "transposition_table",
+    hdrs = ["transposition_table.hpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    include_prefix = "touniu_solver",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":legal_moves",
+        ":position_hash",
+    ],
+)
+
+cc_library(
     name = "search",
     srcs = ["search.cpp"],
     hdrs = ["search.hpp"],
@@ -96,7 +110,10 @@ cc_library(
     local_defines = DDS_LOCAL_DEFINES,
     include_prefix = "touniu_solver",
     visibility = ["//visibility:public"],
-    deps = [":position_hash"],
+    deps = [
+        ":position_hash",
+        ":transposition_table",
+    ],
 )
 
 cc_library(

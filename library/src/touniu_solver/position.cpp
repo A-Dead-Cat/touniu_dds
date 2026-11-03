@@ -190,6 +190,11 @@ auto Position::card(const CardId id) const -> const Card*
     return state_.card(id);
 }
 
+auto Position::card_catalog() const -> const std::vector<Card>&
+{
+    return state_.cards();
+}
+
 auto Position::draw_index() const -> std::uint64_t
 {
     return state_.draw_index();

@@ -98,6 +98,11 @@ auto State::card(const CardId id) const -> const Card*
     return found == cards_.end() ? nullptr : &*found;
 }
 
+auto State::cards() const -> const std::vector<Card>&
+{
+    return cards_;
+}
+
 auto State::next_player() const -> Seat
 {
     return next_player_;

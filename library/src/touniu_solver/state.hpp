@@ -26,6 +26,7 @@ public:
 
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
+    [[nodiscard]] auto cards() const -> const std::vector<Card>&;
     [[nodiscard]] auto next_player() const -> Seat;
     [[nodiscard]] auto contract() const -> Contract;
     [[nodiscard]] auto direction() const -> Direction;
