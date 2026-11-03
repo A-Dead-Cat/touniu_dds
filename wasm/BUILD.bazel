@@ -1,7 +1,57 @@
-load("@rules_cc//cc:defs.bzl", "cc_test")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_test")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
-load("//:CPPVARIABLES.bzl", "DDS_CPPOPTS", "DDS_LOCAL_DEFINES")
+load("//:CPPVARIABLES.bzl", "DDS_CPPOPTS", "DDS_LINKOPTS", "DDS_LOCAL_DEFINES")
+
+# Single-threaded Touniu solver module: no pthread pool, no demo page.
+TOUNIU_WASM_LINKOPTS = [
+    "-sWASM=1",
+    "--no-entry",
+    "-sALLOW_MEMORY_GROWTH=1",
+    "-sMODULARIZE=1",
+    "-sEXPORT_NAME=createTouniuSolver",
+    "-sEXPORTED_FUNCTIONS=['_touniu_solver_solve','_touniu_solver_analyze_actions_v2','_malloc','_free']",
+    "-sEXPORTED_RUNTIME_METHODS=['getValue','setValue']",
+    "-sENVIRONMENT=worker,node",
+    "-sINCOMING_MODULE_JS_API=['wasmBinary']",
+]
+
+cc_binary(
+    name = "touniu_solver_wasm_cc",
+    srcs = ["touniu_solver_module.cpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS + select({
+        "//:build_wasm": TOUNIU_WASM_LINKOPTS,
+        "//conditions:default": [],
+    }),
+    local_defines = DDS_LOCAL_DEFINES,
+    deps = ["//library/src/touniu_solver:c_api"],
+)
+
+wasm_cc_binary(
+    name = "touniu_solver_wasm",
+    cc_target = ":touniu_solver_wasm_cc",
+    threads = "off",
+    outputs = [
+        "touniu_solver.js",
+        "touniu_solver.wasm",
+    ],
+)
+
+py_test(
+    name = "touniu_solver_wasm_test",
+    size = "small",
+    timeout = "short",
+    main = "tests/test_touniu_solver_wasm.py",
+    srcs = [
+        "tests/test_touniu_solver_wasm.py",
+        "tests/touniu_solver_wasm_node.mjs",
+    ],
+    data = [
+        ":touniu_solver_wasm",
+    ],
+)
+
 
 wasm_cc_binary(
     name = "solve_board_wasm",
@@ -106,6 +156,7 @@ test_suite(
     tests = [
         ":calc_dd_table_pbn_test",
         ":run_dtest_wasm_test",
+        ":touniu_solver_wasm_test",
         ":wasm_examples_system_test",
     ],
 )

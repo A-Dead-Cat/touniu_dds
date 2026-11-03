@@ -56,6 +56,11 @@ Rules in `wasm/BUILD.bazel` wrap native binaries:
 - `analyse_play_bin_wasm` — analyze play from binary format
 - `calc_dd_table_pbn_wasm` — double-dummy table from PBN
 - `dtest_wasm` — the `dtest` hand-list harness for Node (`//library/tests:dtest`)
+- `touniu_solver_wasm` — the Touniu solver C ABI (v1 solve plus live-action
+  ABI v2) as a modularized, single-threaded library (`createTouniuSolver`),
+  used by TouniuBridge's Playground worker. Built with `--no-entry`; exported
+  symbols are `touniu_solver_solve`, `touniu_solver_analyze_actions_v2`,
+  `_malloc` and `_free`.
 
 `dtest_wasm` is linked with `NODERAWFS` so Node can pass a real host path to
 `-f` (for example `hands/list1.txt`). Multi-threading is enabled (`-pthread`);
