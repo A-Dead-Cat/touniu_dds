@@ -1,0 +1,11 @@
+load("@rules_cc//cc:defs.bzl", "cc_test")
+
+cc_test(
+    name = "card_test",
+    size = "small",
+    srcs = ["card_test.cpp"],
+    deps = [
+        "//library/src/touniu_solver:card",
+        "@googletest//:gtest_main",
+    ],
+)
