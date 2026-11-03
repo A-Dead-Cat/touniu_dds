@@ -180,6 +180,28 @@ int32_t touniu_solver_analyze_actions_v2(
     uint32_t* required_count
 );
 
+/*
+ * ABI v3: solve 1-4 declarers of one deal and strain with a shared, verified
+ * transposition table. Every element must be a valid v2 request for the same
+ * cards, hands, seed, draw index, direction, contract, tricks won and tricks
+ * remaining, differing only in next player and target partnership. Only empty
+ * trick boundaries are accepted, and declarers must follow North, South, East,
+ * West order (a subset keeps that order), where the leader is the declarer's
+ * left-hand opponent.
+ *
+ * `final_tricks` receives one target-partnership trick count per request.
+ * Capacities and counts are element counts, not bytes. A null or undersized
+ * output writes nothing, stores request_count in `*required_count`, and returns
+ * TOUNIU_SOLVER_BUFFER_TOO_SMALL. `required_count` must not be null.
+ */
+int32_t touniu_solver_analyze_contract_batch_v3(
+    const TouniuAnalyzeRequest* requests,
+    uint32_t request_count,
+    int32_t* final_tricks,
+    uint32_t output_capacity,
+    uint32_t* required_count
+);
+
 #ifdef __cplusplus
 }
 #endif

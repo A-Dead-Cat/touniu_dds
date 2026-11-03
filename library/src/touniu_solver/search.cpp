@@ -18,14 +18,30 @@ auto partnership(const Seat seat) -> Partnership
         ? Partnership::NorthSouth : Partnership::EastWest;
 }
 
-auto score(const Position& position, const Partnership target) -> int
+// Canonical value: the final number of tricks won by North-South. East-West
+// queries convert with (total - canonical), which lets one table serve every
+// declarer of the same deal and strain.
+auto score_ns(const Position& position) -> int
 {
-    if (target == Partnership::NorthSouth) {
-        return static_cast<int>(
-            position.tricks_won(Seat::North) + position.tricks_won(Seat::South));
-    }
     return static_cast<int>(
-        position.tricks_won(Seat::West) + position.tricks_won(Seat::East));
+        position.tricks_won(Seat::North) + position.tricks_won(Seat::South));
+}
+
+auto total_tricks(const Position& position) -> int
+{
+    int won = 0;
+    for (int seat = 0; seat < 4; ++seat) {
+        won += static_cast<int>(position.tricks_won(static_cast<Seat>(seat)));
+    }
+    return won + static_cast<int>(position.tricks_remaining());
+}
+
+auto to_target(
+    const int canonical_ns,
+    const int total,
+    const Partnership target) -> int
+{
+    return target == Partnership::NorthSouth ? canonical_ns : total - canonical_ns;
 }
 
 auto search_depth(const Position& position) -> std::uint32_t
@@ -94,12 +110,10 @@ auto classify(const int value, const int alpha, const int beta) -> Bound
 class SearchContext {
 public:
     SearchContext(
-        const Partnership target,
         const SearchOptions options,
         const std::size_t buffer_count,
         const std::size_t table_slots)
-        : target_(target),
-          options_(options),
+        : options_(options),
           table_(table_slots),
           action_buffers_(buffer_count),
           merge_buffers_(buffer_count),
@@ -108,10 +122,11 @@ public:
     {
     }
 
+    // Canonical North-South result plus the action that achieves it.
     auto solve(Position& position) -> SearchResult
     {
         root_depth_ = search_depth(position);
-        const int low = score(position, target_);
+        const int low = score_ns(position);
         if (position.is_finished()) {
             return {low, std::nullopt};
         }
@@ -123,20 +138,30 @@ public:
         return {result.value.value, result.best_action};
     }
 
-    auto analyze(Position& position) -> std::vector<ActionAnalysis>
+    auto solve_for(Position& position, const Partnership target) -> SearchResult
+    {
+        const int total = total_tricks(position);
+        SearchResult result = solve(position);
+        result.tricks = to_target(result.tricks, total, target);
+        return result;
+    }
+
+    auto analyze(Position& position, const Partnership target)
+        -> std::vector<ActionAnalysis>
     {
         std::vector<ActionAnalysis> results;
         if (position.is_finished()) {
             return results;
         }
         root_depth_ = search_depth(position);
+        const int total = total_tricks(position);
         ActionList& actions = buffer(position);
         position.legal_actions_into(actions);
         results.reserve(actions.size());
         for (std::size_t index = 0; index < actions.size(); ++index) {
             const Action action = actions[index];
             position.apply_known_legal(action);
-            const int low = score(position, target_);
+            const int low = score_ns(position);
             const int high = low + static_cast<int>(position.tricks_remaining());
             // Every displayed action gets its own full natural window so
             // sibling cutoffs can never leak into its value.
@@ -147,9 +172,20 @@ public:
             // The window strictly spans every possible value, so a displayed
             // action can only be backed by an exact result.
             assert(value.bound == Bound::Exact);
-            results.push_back({action, value.value});
+            results.push_back({action, to_target(value.value, total, target)});
         }
         return results;
+    }
+
+    void reset_heuristics()
+    {
+        for (auto& action : main_variation_) {
+            action.reset();
+        }
+        for (auto& killers : killers_) {
+            killers[0].reset();
+            killers[1].reset();
+        }
     }
 
 private:
@@ -213,7 +249,7 @@ private:
         if (options_.stats != nullptr) {
             ++options_.stats->nodes;
         }
-        const int low = score(position, target_);
+        const int low = score_ns(position);
         const int high = low + static_cast<int>(position.tricks_remaining());
         if (low == high) {
             return {low, Bound::Exact};
@@ -296,7 +332,8 @@ private:
         const TranspositionEntry* cached = nullptr) -> ChildResult
     {
         const bool prune = options_.use_alpha_beta;
-        const bool maximizing = partnership(position.next_player()) == target_;
+        const bool maximizing =
+            partnership(position.next_player()) == Partnership::NorthSouth;
         int working_alpha = alpha;
         int working_beta = beta;
         int best = maximizing ? low : high;
@@ -474,7 +511,6 @@ private:
 
     std::uint32_t root_depth_ = 0;
 
-    Partnership target_;
     SearchOptions options_;
     TranspositionTable table_;
     std::vector<ActionList> action_buffers_;
@@ -553,11 +589,10 @@ auto solve(Position& position, Partnership target, const SearchOptions& options)
     -> SearchResult
 {
     SearchContext context(
-        target,
         options,
         static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
         transposition_slots(position.tricks_remaining()));
-    return context.solve(position);
+    return context.solve_for(position, target);
 }
 
 auto analyze_actions(
@@ -576,11 +611,40 @@ auto analyze_actions(
     -> std::vector<ActionAnalysis>
 {
     SearchContext context(
-        target,
         options,
         static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
         transposition_slots(position.tricks_remaining()));
-    return context.analyze(position);
+    return context.analyze(position, target);
+}
+
+auto solve_contract_batch(
+    std::vector<ContractQuery>& queries,
+    const SearchOptions& options) -> std::vector<int>
+{
+    std::vector<int> results;
+    results.reserve(queries.size());
+    if (queries.empty()) {
+        return results;
+    }
+
+    std::size_t buffer_count = 1U;
+    std::size_t table_slots = 1U << 15U;
+    for (const ContractQuery& query : queries) {
+        const std::uint32_t tricks = query.position.tricks_remaining();
+        buffer_count = std::max(
+            buffer_count, static_cast<std::size_t>(tricks) * 4U + 1U);
+        table_slots = std::max(table_slots, transposition_slots(tricks));
+    }
+
+    // One shared table for every declarer of this deal and strain. Heuristics
+    // are per-query so one declarer never biases another's move order.
+    SearchContext context(options, buffer_count, table_slots);
+    for (ContractQuery& query : queries) {
+        context.reset_heuristics();
+        results.push_back(
+            context.solve_for(query.position, query.target_partnership).tricks);
+    }
+    return results;
 }
 
 }  // namespace touniu_solver

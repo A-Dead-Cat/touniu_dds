@@ -437,6 +437,122 @@ TEST(SearchTest, EquivalentPruningKeepsEveryRootAction)
     }
 }
 
+auto contract_scenario(const Seat leader) -> Scenario
+{
+    Scenario scenario;
+    scenario.next_player = leader;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 3;
+    scenario.hands[0] = {
+        Card::normal(CardId{1}, Suit::Spades, Rank::integer(14)),
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(2)),
+        Card::normal(CardId{3}, Suit::Hearts, Rank::integer(5)),
+    };
+    scenario.hands[1] = {
+        Card::normal(CardId{4}, Suit::Spades, Rank::integer(13)),
+        Card::normal(CardId{5}, Suit::Hearts, Rank::integer(14)),
+        Card::normal(CardId{6}, Suit::Clubs, Rank::integer(3)),
+    };
+    scenario.hands[2] = {
+        Card::normal(CardId{7}, Suit::Spades, Rank::integer(12)),
+        Card::normal(CardId{8}, Suit::Hearts, Rank::integer(13)),
+        Card::normal(CardId{9}, Suit::Diamonds, Rank::integer(4)),
+    };
+    scenario.hands[3] = {
+        Card::normal(CardId{10}, Suit::Spades, Rank::integer(11)),
+        Card::normal(CardId{11}, Suit::Hearts, Rank::integer(12)),
+        Card::normal(CardId{12}, Suit::Clubs, Rank::integer(5)),
+    };
+    return scenario;
+}
+
+TEST(SearchTest, ContractBatchMatchesIndependentSolves)
+{
+    // Declarer -> (leader, target) follows the both-directions contract table.
+    struct Entry {
+        Seat declarer;
+        Seat leader;
+        Partnership target;
+    };
+    const std::array<Entry, 4> entries = {{
+        {Seat::North, Seat::East, Partnership::NorthSouth},
+        {Seat::South, Seat::West, Partnership::NorthSouth},
+        {Seat::East, Seat::South, Partnership::EastWest},
+        {Seat::West, Seat::North, Partnership::EastWest},
+    }};
+
+    std::vector<ContractQuery> queries;
+    std::vector<int> independent;
+    for (const Entry& entry : entries) {
+        auto position = Position::create(contract_scenario(entry.leader));
+        ASSERT_TRUE(position.has_value());
+        auto reference = Position::create(contract_scenario(entry.leader));
+        ASSERT_TRUE(reference.has_value());
+        independent.push_back(solve(*reference, entry.target).tricks);
+        queries.push_back({std::move(*position), entry.target});
+    }
+
+    const std::vector<int> shared = solve_contract_batch(queries);
+    ASSERT_EQ(shared.size(), independent.size());
+    for (std::size_t index = 0; index < shared.size(); ++index) {
+        EXPECT_EQ(shared[index], independent[index]) << "declarer " << index;
+    }
+
+    // The same position viewed from both partnerships is complementary.
+    auto north_south_position = Position::create(contract_scenario(Seat::East));
+    auto east_west_position = Position::create(contract_scenario(Seat::East));
+    ASSERT_TRUE(north_south_position.has_value());
+    ASSERT_TRUE(east_west_position.has_value());
+    const int north_south =
+        solve(*north_south_position, Partnership::NorthSouth).tricks;
+    const int east_west =
+        solve(*east_west_position, Partnership::EastWest).tricks;
+    EXPECT_EQ(north_south + east_west, 3);
+}
+
+TEST(SearchTest, ContractBatchSharesTranspositionHits)
+{
+    std::vector<ContractQuery> batch;
+    for (const Seat leader : {Seat::East, Seat::West, Seat::South, Seat::North}) {
+        auto position = Position::create(contract_scenario(leader));
+        ASSERT_TRUE(position.has_value());
+        const Partnership target = leader == Seat::East || leader == Seat::West
+            ? Partnership::NorthSouth : Partnership::EastWest;
+        batch.push_back({std::move(*position), target});
+    }
+    SearchStats shared_stats;
+    solve_contract_batch(batch, SearchOptions{true, true, &shared_stats});
+
+    std::uint64_t independent_nodes = 0;
+    for (const Seat leader : {Seat::East, Seat::West, Seat::South, Seat::North}) {
+        auto position = Position::create(contract_scenario(leader));
+        ASSERT_TRUE(position.has_value());
+        const Partnership target = leader == Seat::East || leader == Seat::West
+            ? Partnership::NorthSouth : Partnership::EastWest;
+        SearchStats stats;
+        solve(*position, target, SearchOptions{true, true, &stats});
+        independent_nodes += stats.nodes;
+    }
+
+    EXPECT_GT(shared_stats.nodes, 0U);
+    EXPECT_LT(shared_stats.nodes, independent_nodes);
+}
+
+TEST(SearchTest, EastWestActionValuesMatchTheOracle)
+{
+    const Scenario scenario = contract_scenario(Seat::South);
+    auto position = *Position::create(scenario);
+    const std::vector<ActionAnalysis> analyses = analyze_actions(
+        position, Partnership::EastWest, SearchOptions{true, true, nullptr});
+
+    ASSERT_FALSE(analyses.empty());
+    for (const ActionAnalysis& analysis : analyses) {
+        auto forced = *Position::create(scenario);
+        ASSERT_TRUE(forced.apply(analysis.action));
+        EXPECT_EQ(analysis.final_tricks, oracle(forced, Partnership::EastWest));
+    }
+}
+
 TEST(SearchTest, DeterministicOrderingKeepsCanonicalBestAction)
 {
     for (int deal_index = 0; deal_index < 4; ++deal_index) {

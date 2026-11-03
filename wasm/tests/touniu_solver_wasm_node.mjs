@@ -130,28 +130,32 @@ async function main() {
       u32(wonPtr + index * 4, 0);
     }
 
-    u32(requestPtr + REQ.abiVersion, ABI_VERSION_V2);
-    u32(requestPtr + REQ.cards, cardsPtr);
-    u32(requestPtr + REQ.cardCount, 2);
-    u32(requestPtr + REQ.handCardIds, handsPtr);
-    u32(requestPtr + REQ.handCounts, countsPtr);
-    u32(requestPtr + REQ.currentTrick, 0);
-    u32(requestPtr + REQ.currentTrickCount, 0);
-    u32(requestPtr + REQ.nextPlayer, SEAT_WEST);
-    u32(requestPtr + REQ.direction, DIRECTION_FORWARD);
-    u32(requestPtr + REQ.contract, CONTRACT_NO_TRUMP);
-    u32(requestPtr + REQ.targetPartnership, PARTNERSHIP_EAST_WEST);
-    u32(requestPtr + REQ.tricksRemaining, 1);
-    u32(requestPtr + REQ.tricksWon, wonPtr);
-    u8(requestPtr + REQ.hasPendingBlock, 0);
-    u32(requestPtr + REQ.pendingBlockSeat, -1);
-    u32(requestPtr + REQ.validReverseCount, 0);
-    u32(requestPtr + REQ.seed, 0);
-    u64(requestPtr + REQ.trickStartDrawIndex, 0);
-    u64(requestPtr + REQ.drawIndex, 0);
-    u32(requestPtr + REQ.generatedCardIds, 0);
-    u32(requestPtr + REQ.generatedCardIdCount, 0);
-    u8(requestPtr + REQ.useAlphaBeta, 1);
+    const writeRequest = (ptr, nextPlayer, targetPartnership) => {
+      u32(ptr + REQ.abiVersion, ABI_VERSION_V2);
+      u32(ptr + REQ.cards, cardsPtr);
+      u32(ptr + REQ.cardCount, 2);
+      u32(ptr + REQ.handCardIds, handsPtr);
+      u32(ptr + REQ.handCounts, countsPtr);
+      u32(ptr + REQ.currentTrick, 0);
+      u32(ptr + REQ.currentTrickCount, 0);
+      u32(ptr + REQ.nextPlayer, nextPlayer);
+      u32(ptr + REQ.direction, DIRECTION_FORWARD);
+      u32(ptr + REQ.contract, CONTRACT_NO_TRUMP);
+      u32(ptr + REQ.targetPartnership, targetPartnership);
+      u32(ptr + REQ.tricksRemaining, 1);
+      u32(ptr + REQ.tricksWon, wonPtr);
+      u8(ptr + REQ.hasPendingBlock, 0);
+      u32(ptr + REQ.pendingBlockSeat, -1);
+      u32(ptr + REQ.validReverseCount, 0);
+      u32(ptr + REQ.seed, 0);
+      u64(ptr + REQ.trickStartDrawIndex, 0);
+      u64(ptr + REQ.drawIndex, 0);
+      u32(ptr + REQ.generatedCardIds, 0);
+      u32(ptr + REQ.generatedCardIdCount, 0);
+      u8(ptr + REQ.useAlphaBeta, 1);
+    };
+
+    writeRequest(requestPtr, SEAT_WEST, PARTNERSHIP_EAST_WEST);
 
     let status = module._touniu_solver_analyze_actions_v2(
       requestPtr,
@@ -192,6 +196,70 @@ async function main() {
     if (mode !== PLAY_LEAD) fail(`mode ${mode}, expected lead`);
     if (suit !== SUIT_SPADES) fail(`effective_suit ${suit}, expected spades`);
     if (tricks !== 1) fail(`final_tricks ${tricks}, expected 1`);
+
+    if (typeof module._touniu_solver_analyze_contract_batch_v3 !== "function") {
+      fail("missing export _touniu_solver_analyze_contract_batch_v3");
+    }
+    const batchRequests = module._malloc(2 * REQUEST_SIZE);
+    const batchOutput = module._malloc(2 * 4);
+    const batchRequired = module._malloc(4);
+    try {
+      // Canonical declarer order: North (leader East, target NS) then East
+      // (leader South, target EW).
+      writeRequest(batchRequests, SEAT_EAST, PARTNERSHIP_NORTH_SOUTH);
+      writeRequest(batchRequests + REQUEST_SIZE, SEAT_SOUTH, PARTNERSHIP_EAST_WEST);
+      let batchStatus = module._touniu_solver_analyze_contract_batch_v3(
+        batchRequests, 2, 0, 0, batchRequired,
+      );
+      if (batchStatus !== BUFFER_TOO_SMALL) {
+        fail(`batch negotiation status ${batchStatus}`);
+      }
+      if (module.getValue(batchRequired, "i32") !== 2) {
+        fail("batch required count mismatch");
+      }
+      batchStatus = module._touniu_solver_analyze_contract_batch_v3(
+        batchRequests, 2, batchOutput, 2, batchRequired,
+      );
+      if (batchStatus !== OK) fail(`batch status ${batchStatus}`);
+
+      const expected = [0, 0];
+      for (let index = 0; index < 2; index += 1) {
+        const request = module._malloc(REQUEST_SIZE);
+        try {
+          writeRequest(
+            request,
+            index === 0 ? SEAT_EAST : SEAT_SOUTH,
+            index === 0 ? PARTNERSHIP_NORTH_SOUTH : PARTNERSHIP_EAST_WEST,
+          );
+          const required = module.getValue(requiredPtr, "i32");
+          const reference = module._malloc(Math.max(required, 1) * ACTION_SIZE);
+          const status = module._touniu_solver_analyze_actions_v2(
+            request, reference, required, requiredPtr,
+          );
+          if (status !== OK) fail(`reference status ${status}`);
+          let best = 0;
+          for (let record = 0; record < required; record += 1) {
+            best = Math.max(
+              best,
+              module.getValue(reference + record * ACTION_SIZE + ACTION.finalTricks, "i32"),
+            );
+          }
+          expected[index] = best;
+          module._free(reference);
+        } finally {
+          module._free(request);
+        }
+      }
+      for (let index = 0; index < 2; index += 1) {
+        if (module.getValue(batchOutput + index * 4, "i32") !== expected[index]) {
+          fail(`batch result ${index} differs from ABI v2`);
+        }
+      }
+    } finally {
+      module._free(batchRequired);
+      module._free(batchOutput);
+      module._free(batchRequests);
+    }
 
     console.log("touniu_solver_wasm_node: OK");
   } finally {

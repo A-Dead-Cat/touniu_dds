@@ -136,6 +136,14 @@ choice when a card can legally be played.
   and no plain card in any hand or in the current trick with a rank strictly
   between them. Any special, multi-suit or `+2` card that can still participate
   disables the merge. The analysis root always reports every legal action.
+- Search values are stored canonically from the North-South perspective. A
+  contract query for East-West reports `total - canonical_ns`, where
+  `total = completed tricks + tricks remaining` for the deal. Neither the
+  transposition key nor the stored value depends on the requested target.
+- A contract-table batch solves one to four declarers of the same deal and
+  strain with a single shared table, resetting ordering heuristics between
+  declarers. The per-action analysis API keeps its existing shape and converts
+  every returned value to the requested target partnership.
 - The position identity used by the table is maintained incrementally from
   applied and undone actions and includes each seat's own win count. Positions
   that differ only in which partner won an earlier trick are therefore not
@@ -155,6 +163,12 @@ choice when a card can legally be played.
   WASM wrapper. TouniuBridge supplies exact millionth ranks and immutable card
   IDs and receives the optimal trick count plus the best card, play mode and
   effective suit. Unknown ABI versions and malformed cards fail explicitly.
+- `library/src/touniu_solver/c_api.h` declares ABI v3
+  (`touniu_solver_analyze_contract_batch_v3`) alongside the unchanged v1/v2
+  symbols. It accepts 1-4 requests for one deal and strain, validates that only
+  the leader and target differ, requires an empty trick boundary and a legal
+  declarer/leader pair in North, South, East, West order, and returns target
+  trick counts in input order.
 - The C ABI currently accepts positions at a trick boundary. Importing an
   already-partially-played trick will be added before TouniuBridge uses the
   solver for mid-trick advice.

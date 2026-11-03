@@ -54,6 +54,13 @@ struct ActionAnalysis {
     int final_tricks = 0;
 };
 
+// One contract-table query: a starting position plus the partnership whose
+// final tricks are requested.
+struct ContractQuery {
+    Position position;
+    Partnership target_partnership = Partnership::NorthSouth;
+};
+
 auto solve(Position& position, Partnership target, bool use_alpha_beta = true)
     -> SearchResult;
 
@@ -71,6 +78,14 @@ auto analyze_actions(
     Position& position,
     Partnership target,
     const SearchOptions& options) -> std::vector<ActionAnalysis>;
+
+// Solves several contract-table queries for the same deal and strain with one
+// shared, verified transposition table. Values are stored canonically from the
+// North-South perspective, so queries for different declarers can reuse them.
+// Ordering heuristics are reset between queries.
+auto solve_contract_batch(
+    std::vector<ContractQuery>& queries,
+    const SearchOptions& options = {}) -> std::vector<int>;
 
 // Conservative equivalence predicate used by the search. Exposed for tests; it
 // never reports equivalence when a special, multi-suit or +2 card remains able

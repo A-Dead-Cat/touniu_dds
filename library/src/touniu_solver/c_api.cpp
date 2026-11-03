@@ -376,3 +376,141 @@ extern "C" auto touniu_solver_analyze_actions_v2(
     }
     return TOUNIU_SOLVER_OK;
 }
+
+namespace {
+
+using namespace touniu_solver;
+
+// Canonical declarer order used by the batch ABI: North, South, East, West.
+// -1 means the leader/target combination is not a legal contract query.
+auto declarer_order(const TouniuAnalyzeRequest& request) -> int
+{
+    if (request.target_partnership == TOUNIU_PARTNERSHIP_NORTH_SOUTH) {
+        if (request.next_player == TOUNIU_SEAT_EAST) {
+            return 0;
+        }
+        if (request.next_player == TOUNIU_SEAT_WEST) {
+            return 1;
+        }
+        return -1;
+    }
+    if (request.target_partnership == TOUNIU_PARTNERSHIP_EAST_WEST) {
+        if (request.next_player == TOUNIU_SEAT_SOUTH) {
+            return 2;
+        }
+        if (request.next_player == TOUNIU_SEAT_NORTH) {
+            return 3;
+        }
+    }
+    return -1;
+}
+
+auto same_live_card(const Card& left, const Card& right) -> bool
+{
+    return left.id() == right.id() && left.kind() == right.kind() &&
+           left.rank() == right.rank() &&
+           left.intrinsic_suits() == right.intrinsic_suits();
+}
+
+auto batch_compatible(const LivePosition& left, const LivePosition& right) -> bool
+{
+    if (left.direction != right.direction ||
+        left.contract != right.contract ||
+        left.tricks_remaining != right.tricks_remaining ||
+        left.tricks_won != right.tricks_won ||
+        left.seed != right.seed ||
+        left.trick_start_draw_index != right.trick_start_draw_index ||
+        left.draw_index != right.draw_index ||
+        left.valid_reverse_count != right.valid_reverse_count ||
+        left.pending_block != right.pending_block ||
+        left.hands != right.hands ||
+        left.current_trick_generated_card_ids != right.current_trick_generated_card_ids ||
+        left.cards.size() != right.cards.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.cards.size(); ++index) {
+        if (!same_live_card(left.cards[index], right.cards[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+extern "C" auto touniu_solver_analyze_contract_batch_v3(
+    const TouniuAnalyzeRequest* requests,
+    const std::uint32_t request_count,
+    std::int32_t* final_tricks,
+    const std::uint32_t output_capacity,
+    std::uint32_t* required_count) -> std::int32_t
+{
+    if (required_count == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    *required_count = 0U;
+    if (requests == nullptr || request_count == 0U || request_count > 4U) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    std::vector<LivePosition> lives;
+    std::vector<Partnership> targets;
+    lives.reserve(request_count);
+    targets.reserve(request_count);
+    int previous_declarer = -1;
+    for (std::uint32_t index = 0; index < request_count; ++index) {
+        const TouniuAnalyzeRequest& request = requests[index];
+        if (request.abi_version != TOUNIU_SOLVER_ABI_VERSION_V2) {
+            return TOUNIU_SOLVER_UNSUPPORTED_VERSION;
+        }
+        if (!analyze_actions_request_is_valid(request)) {
+            return TOUNIU_SOLVER_INVALID_REQUEST;
+        }
+        if (request.current_trick_count != 0U ||
+            request.has_pending_block != 0U ||
+            request.valid_reverse_count != 0U) {
+            return TOUNIU_SOLVER_INVALID_REQUEST;
+        }
+        const int declarer = declarer_order(request);
+        if (declarer < 0 || declarer <= previous_declarer) {
+            return TOUNIU_SOLVER_INVALID_REQUEST;
+        }
+        previous_declarer = declarer;
+
+        auto live = decode_live_position(request);
+        if (!live.has_value()) {
+            return TOUNIU_SOLVER_INVALID_REQUEST;
+        }
+        lives.push_back(std::move(*live));
+        targets.push_back(static_cast<Partnership>(
+            request.target_partnership));
+    }
+
+    for (std::size_t index = 1; index < lives.size(); ++index) {
+        if (!batch_compatible(lives[0], lives[index])) {
+            return TOUNIU_SOLVER_INVALID_REQUEST;
+        }
+    }
+
+    *required_count = request_count;
+    if (final_tricks == nullptr || output_capacity < request_count) {
+        return TOUNIU_SOLVER_BUFFER_TOO_SMALL;
+    }
+
+    std::vector<ContractQuery> queries;
+    queries.reserve(request_count);
+    for (std::uint32_t index = 0; index < request_count; ++index) {
+        auto position = Position::create(lives[index]);
+        if (!position.has_value()) {
+            return TOUNIU_SOLVER_INVALID_REQUEST;
+        }
+        queries.push_back(
+            {std::move(*position), targets[index]});
+    }
+
+    const std::vector<int> values = solve_contract_batch(queries);
+    for (std::uint32_t index = 0; index < request_count; ++index) {
+        final_tricks[index] = values[index];
+    }
+    return TOUNIU_SOLVER_OK;
+}
