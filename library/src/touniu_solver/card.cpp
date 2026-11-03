@@ -10,7 +10,9 @@ constexpr std::int32_t Million = 1'000'000;
 constexpr std::int32_t LowestRank = Million;
 constexpr std::int32_t HighestRank = 16 * Million;
 
-auto is_normal_suit(const Suit suit) -> bool
+// Release/WASM builds compile out the assertions that consume this helper;
+// retain it for the constructor preconditions in assertion-enabled builds.
+[[maybe_unused]] auto is_normal_suit(const Suit suit) -> bool
 {
     return suit != Suit::NoTrump;
 }
