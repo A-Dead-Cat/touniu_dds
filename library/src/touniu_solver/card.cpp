@@ -124,7 +124,7 @@ auto Card::reverse(const CardId id, const Suit suit) -> Card
 auto Card::cherry_bomb(const CardId id, const Suit suit) -> Card
 {
     assert(is_normal_suit(suit));
-    return Card(id, CardKind::CherryBomb, *Rank::from_millionths(14'000'001), {suit});
+    return Card(id, CardKind::CherryBomb, Rank::integer(15), {suit});
 }
 
 auto Card::special(
@@ -134,11 +134,9 @@ auto Card::special(
 {
     assert(kind == CardKind::Block || kind == CardKind::Reverse ||
            kind == CardKind::PlusTwo || kind == CardKind::CherryBomb);
-    const Rank rank = kind == CardKind::PlusTwo
+    const Rank rank = (kind == CardKind::PlusTwo || kind == CardKind::CherryBomb)
         ? Rank::integer(15)
-        : kind == CardKind::CherryBomb
-              ? *Rank::from_millionths(14'000'001)
-              : Rank::integer(1);
+        : Rank::integer(1);
     return Card(id, kind, rank, std::move(intrinsic_suits));
 }
 
