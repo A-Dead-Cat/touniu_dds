@@ -1,9 +1,8 @@
 #pragma once
 
-#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 #include <touniu_solver/legal_moves.hpp>
@@ -11,6 +10,8 @@
 
 namespace touniu_solver {
 
+// Logical view of a table record. `probe()` fills a scratch instance owned by
+// the table, so the returned pointer is only valid until the next probe/store.
 struct TranspositionEntry {
     PositionIdentity identity{};
     std::uint32_t depth = 0;
@@ -20,109 +21,79 @@ struct TranspositionEntry {
     std::optional<Action> best_action;
 };
 
-// Request-scoped table keyed by the primary identity and verified by the
-// secondary identity. Entries are depth-scoped and merge bounds monotonically:
-// lower bounds only strengthen, upper bounds only weaken downward, and an exact
-// value is never replaced by a weaker record.
+// Request-scoped, bounded table keyed by the primary identity and verified by
+// the secondary identity. Slots are stored in a flat, fixed-size array so the
+// table has a hard memory bound even for deep searches. Entries within a bucket
+// are merged monotonically; a full bucket replaces its shallowest record, which
+// can only cost cache hits, never exactness.
 class TranspositionTable {
 public:
+    static constexpr std::size_t BucketSize = 4;
+
     struct Probe {
         const TranspositionEntry* entry = nullptr;
         bool collision = false;
     };
 
-    [[nodiscard]] auto probe(const PositionIdentity identity) -> Probe
-    {
-        const auto bucket = buckets_.find(identity.primary);
-        if (bucket == buckets_.end()) {
-            return {};
-        }
-        bool saw_primary = false;
-        for (const TranspositionEntry& entry : bucket->second) {
-            saw_primary = true;
-            if (entry.identity == identity) {
-                return {&entry, false};
-            }
-        }
-        return {nullptr, saw_primary};
-    }
+    // `slot_count` is rounded up to a whole number of buckets. Zero selects a
+    // small default suitable for tests.
+    explicit TranspositionTable(std::size_t slot_count = 1U << 10U);
+
+    [[nodiscard]] auto probe(PositionIdentity identity) -> Probe;
 
     void store(
-        const PositionIdentity identity,
-        const std::uint32_t depth,
-        const std::optional<int> exact,
-        const std::optional<int> lower,
-        const std::optional<int> upper,
-        const std::optional<Action>& best_action)
-    {
-        std::vector<TranspositionEntry>& bucket = buckets_[identity.primary];
-        auto found = std::find_if(
-            bucket.begin(),
-            bucket.end(),
-            [identity](const TranspositionEntry& entry) {
-                return entry.identity == identity;
-            });
-
-        if (found == bucket.end()) {
-            bucket.push_back(TranspositionEntry{identity, depth, exact, lower, upper, best_action});
-            return;
-        }
-
-        if (depth < found->depth) {
-            return;
-        }
-        if (depth > found->depth) {
-            // A deeper result supersedes any shallower incompatible record.
-            found->depth = depth;
-            found->exact = exact;
-            found->lower = lower;
-            found->upper = upper;
-            found->best_action = best_action;
-            return;
-        }
-
-        if (found->exact.has_value()) {
-            return;
-        }
-        if (exact.has_value()) {
-            found->exact = exact;
-            found->lower.reset();
-            found->upper.reset();
-            if (best_action.has_value()) {
-                found->best_action = best_action;
-            }
-            return;
-        }
-        if (lower.has_value()) {
-            found->lower = found->lower.has_value()
-                ? std::max(*found->lower, *lower) : lower;
-        }
-        if (upper.has_value()) {
-            found->upper = found->upper.has_value()
-                ? std::min(*found->upper, *upper) : upper;
-        }
-        if (!found->best_action.has_value() && best_action.has_value()) {
-            found->best_action = best_action;
-        }
-        if (found->lower.has_value() && found->upper.has_value() &&
-            *found->lower == *found->upper) {
-            found->exact = *found->lower;
-            found->lower.reset();
-            found->upper.reset();
-        }
-    }
+        PositionIdentity identity,
+        std::uint32_t depth,
+        std::optional<int> exact,
+        std::optional<int> lower,
+        std::optional<int> upper,
+        const std::optional<Action>& best_action);
 
     [[nodiscard]] auto size() const -> std::size_t
     {
-        std::size_t total = 0;
-        for (const auto& bucket : buckets_) {
-            total += bucket.second.size();
-        }
-        return total;
+        return live_entries_;
+    }
+
+    [[nodiscard]] auto slot_count() const -> std::size_t
+    {
+        return slots_.size();
     }
 
 private:
-    std::unordered_map<std::uint64_t, std::vector<TranspositionEntry>> buckets_;
+    struct Slot {
+        std::uint64_t primary = 0;
+        std::uint64_t verifier = 0;
+        std::uint64_t card_id = 0;
+        std::uint8_t depth = 0;
+        std::uint8_t flags = 0;
+        std::int8_t exact = 0;
+        std::int8_t lower = 0;
+        std::int8_t upper = 0;
+        std::uint8_t mode = 0;
+        std::uint8_t suit = 0;
+        std::uint8_t pass = 0;
+    };
+
+    static_assert(sizeof(Slot) == 32, "transposition slot must stay compact");
+
+    static constexpr std::uint8_t HasExact = 0x01;
+    static constexpr std::uint8_t HasLower = 0x02;
+    static constexpr std::uint8_t HasUpper = 0x04;
+    static constexpr std::uint8_t HasCardAction = 0x08;
+    static constexpr std::uint8_t HasPassAction = 0x10;
+    static constexpr std::uint8_t NoMode = 0xFF;
+    static constexpr std::uint8_t NoSuit = 0xFF;
+
+    void load(const Slot& slot);
+    void merge(Slot& slot, std::uint32_t depth, std::optional<int> exact,
+               std::optional<int> lower, std::optional<int> upper,
+               const std::optional<Action>& best_action);
+    static void write_best_action(Slot& slot, const std::optional<Action>& action);
+
+    std::vector<Slot> slots_;
+    std::size_t bucket_mask_ = 0;
+    std::size_t live_entries_ = 0;
+    TranspositionEntry scratch_;
 };
 
 }  // namespace touniu_solver

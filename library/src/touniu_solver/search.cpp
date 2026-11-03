@@ -31,13 +31,36 @@ auto search_depth(const Position& position) -> std::uint32_t
            static_cast<std::uint32_t>(position.current_trick().size());
 }
 
+// Flat-table capacity per deal size. The values cover the observed number of
+// distinct positions with headroom while staying well inside a wasm32 heap.
+auto transposition_slots(const std::uint32_t tricks) -> std::size_t
+{
+    if (tricks <= 5U) {
+        return 1U << 15U;
+    }
+    if (tricks == 6U) {
+        return 1U << 17U;
+    }
+    if (tricks == 7U) {
+        return 1U << 20U;
+    }
+    if (tricks == 8U) {
+        return 1U << 23U;
+    }
+    return 1U << 24U;
+}
+
 class SearchContext {
 public:
     SearchContext(
         const Partnership target,
         const SearchOptions options,
-        const std::size_t buffer_count)
-        : target_(target), options_(options), action_buffers_(buffer_count)
+        const std::size_t buffer_count,
+        const std::size_t table_slots)
+        : target_(target),
+          options_(options),
+          table_(table_slots),
+          action_buffers_(buffer_count)
     {
     }
 
@@ -226,7 +249,10 @@ auto solve(Position& position, Partnership target, const SearchOptions& options)
     -> SearchResult
 {
     SearchContext context(
-        target, options, static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U);
+        target,
+        options,
+        static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
+        transposition_slots(position.tricks_remaining()));
     return context.solve(position);
 }
 
@@ -245,7 +271,10 @@ auto analyze_actions(
     const SearchOptions& options) -> std::vector<ActionAnalysis>
 {
     SearchContext context(
-        target, options, static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U);
+        target,
+        options,
+        static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
+        transposition_slots(position.tricks_remaining()));
     return context.analyze(position);
 }
 
