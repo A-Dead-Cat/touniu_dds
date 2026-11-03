@@ -7,20 +7,29 @@
 namespace touniu_solver {
 namespace {
 
+auto is_multi_suit_card(const Card& card) -> bool
+{
+    if (card.kind() == CardKind::FourSuit ||
+        card.kind() == CardKind::ThreeSuitCat) {
+        return true;
+    }
+    // Four-suit specials (block/reverse/+2/cherry) carry all four ordinary
+    // suits and therefore play as wild cards with an attached effect.
+    return card.intrinsic_suits().size() == 4U;
+}
+
+auto is_four_suit_like(const Card& card) -> bool
+{
+    return is_multi_suit_card(card) && card.kind() != CardKind::ThreeSuitCat;
+}
+
 auto has_ordinary_card(const State& state, const std::vector<CardId>& hand) -> bool
 {
     return std::any_of(hand.begin(), hand.end(), [&state](const CardId id) {
         const Card* card = state.card(id);
         assert(card != nullptr);
-        return card->kind() != CardKind::FourSuit &&
-               card->kind() != CardKind::ThreeSuitCat;
+        return !is_multi_suit_card(*card);
     });
-}
-
-auto is_multi_suit_card(const Card& card) -> bool
-{
-    return card.kind() == CardKind::FourSuit ||
-           card.kind() == CardKind::ThreeSuitCat;
 }
 
 auto trump_suit(const Contract contract) -> std::optional<Suit>
@@ -126,9 +135,7 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         for (const CardId id : hand) {
             const Card* card = state.card(id);
             assert(card != nullptr);
-            if (ordinary_card_remains &&
-                (card->kind() == CardKind::FourSuit ||
-                 card->kind() == CardKind::ThreeSuitCat)) {
+            if (ordinary_card_remains && is_multi_suit_card(*card)) {
                 continue;
             }
             if (card->kind() == CardKind::ThreeSuitCat) {
@@ -172,7 +179,7 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
     for (const CardId id : hand) {
         const Card* card = state.card(id);
         assert(card != nullptr);
-        if (card->kind() == CardKind::FourSuit &&
+        if (is_four_suit_like(*card) &&
             !has_led_suit && state.contract() == Contract::NoTrump &&
             lead_card != nullptr &&
             (lead_card->kind() == CardKind::BigJoker ||
@@ -201,7 +208,7 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
             }
             continue;
         }
-        if (card->kind() == CardKind::FourSuit && !has_led_suit) {
+        if (is_four_suit_like(*card) && !has_led_suit) {
             actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
             actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
             if (const auto trump = trump_suit(state.contract());

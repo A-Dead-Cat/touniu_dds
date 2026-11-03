@@ -90,6 +90,7 @@ public:
     static auto block(CardId id, Suit suit) -> Card;
     static auto reverse(CardId id, Suit suit) -> Card;
     static auto cherry_bomb(CardId id, Suit suit) -> Card;
+    static auto special(CardId id, CardKind kind, std::vector<Suit> intrinsic_suits) -> Card;
 
     [[nodiscard]] auto id() const -> CardId;
     [[nodiscard]] auto kind() const -> CardKind;

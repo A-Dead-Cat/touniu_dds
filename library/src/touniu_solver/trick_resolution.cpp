@@ -39,7 +39,7 @@ auto eligible(const State& state, const Trick& trick, const TrickPlay& play) -> 
     }
     const Card* lead = state.card(*trick.front().action.card_id());
     assert(lead != nullptr);
-    if (lead->kind() == CardKind::FourSuit) {
+    if (lead->kind() == CardKind::FourSuit || lead->intrinsic_suits().size() == 4U) {
         return 1;
     }
     if (is_trump(state, *card, play.action)) {

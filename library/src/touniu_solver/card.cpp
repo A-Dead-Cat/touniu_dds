@@ -127,6 +127,21 @@ auto Card::cherry_bomb(const CardId id, const Suit suit) -> Card
     return Card(id, CardKind::CherryBomb, *Rank::from_millionths(14'000'001), {suit});
 }
 
+auto Card::special(
+    const CardId id,
+    const CardKind kind,
+    std::vector<Suit> intrinsic_suits) -> Card
+{
+    assert(kind == CardKind::Block || kind == CardKind::Reverse ||
+           kind == CardKind::PlusTwo || kind == CardKind::CherryBomb);
+    const Rank rank = kind == CardKind::PlusTwo
+        ? Rank::integer(15)
+        : kind == CardKind::CherryBomb
+              ? *Rank::from_millionths(14'000'001)
+              : Rank::integer(1);
+    return Card(id, kind, rank, std::move(intrinsic_suits));
+}
+
 auto Card::id() const -> CardId
 {
     return id_;

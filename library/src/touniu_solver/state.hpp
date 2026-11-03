@@ -32,10 +32,14 @@ public:
     [[nodiscard]] auto requires_temporary_pass() const -> bool;
     [[nodiscard]] auto seed() const -> std::uint32_t;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;
+    [[nodiscard]] auto tricks_remaining() const -> std::uint32_t;
     [[nodiscard]] auto is_finished() const -> bool;
 
     auto draw_floating(Seat seat) -> Card;
     void complete_trick();
+    auto remove_from_hand(Seat seat, CardId id) -> bool;
+    void set_next_player(Seat seat);
+    void set_direction(Direction direction);
 
 private:
     State(

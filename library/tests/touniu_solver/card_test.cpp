@@ -60,5 +60,36 @@ TEST(CardTest, RepresentsNoTrumpAsTheFifthIntrinsicSuit)
     EXPECT_EQ(no_trump.rank().millionths(), 9'000'000);
 }
 
+TEST(CardTest, RepresentsFourSuitAndNoTrumpSpecialCards)
+{
+    const Card four_suit_block = Card::special(
+        CardId{48},
+        CardKind::Block,
+        {Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs}
+    );
+    const Card nt_reverse = Card::special(
+        CardId{49},
+        CardKind::Reverse,
+        {Suit::NoTrump}
+    );
+    const Card rainbow_plus_two = Card::special(
+        CardId{50},
+        CardKind::PlusTwo,
+        {Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs}
+    );
+
+    EXPECT_EQ(four_suit_block.kind(), CardKind::Block);
+    EXPECT_EQ(four_suit_block.intrinsic_suits().size(), 4U);
+    EXPECT_EQ(four_suit_block.rank().millionths(), 1'000'000);
+
+    EXPECT_EQ(nt_reverse.kind(), CardKind::Reverse);
+    EXPECT_EQ(nt_reverse.intrinsic_suits(), std::vector<Suit>{Suit::NoTrump});
+    EXPECT_EQ(nt_reverse.rank().millionths(), 1'000'000);
+
+    EXPECT_EQ(rainbow_plus_two.kind(), CardKind::PlusTwo);
+    EXPECT_EQ(rainbow_plus_two.intrinsic_suits().size(), 4U);
+    EXPECT_EQ(rainbow_plus_two.rank().millionths(), 15'000'000);
+}
+
 }  // namespace
 }  // namespace touniu_solver

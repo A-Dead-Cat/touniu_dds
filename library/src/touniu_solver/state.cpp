@@ -126,6 +126,11 @@ auto State::draw_index() const -> std::uint64_t
     return draw_index_;
 }
 
+auto State::tricks_remaining() const -> std::uint32_t
+{
+    return tricks_remaining_;
+}
+
 auto State::is_finished() const -> bool
 {
     return tricks_remaining_ == 0;
@@ -163,6 +168,27 @@ void State::complete_trick()
     if (tricks_remaining_ > 0) {
         --tricks_remaining_;
     }
+}
+
+auto State::remove_from_hand(const Seat seat, const CardId id) -> bool
+{
+    std::vector<CardId>& hand = hands_[seat_index(seat)];
+    const auto found = std::find(hand.begin(), hand.end(), id);
+    if (found == hand.end()) {
+        return false;
+    }
+    hand.erase(found);
+    return true;
+}
+
+void State::set_next_player(const Seat seat)
+{
+    next_player_ = seat;
+}
+
+void State::set_direction(const Direction direction)
+{
+    direction_ = direction;
 }
 
 auto State::card_id_exists(const CardId id) const -> bool
