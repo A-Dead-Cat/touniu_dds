@@ -151,6 +151,9 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         }
         if (card->kind() == CardKind::ThreeSuitCat) {
             if (state.contract() == Contract::NoTrump) {
+                if (*led_suit == Suit::NoTrump && !has_led_suit) {
+                    actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+                }
                 continue;
             }
             const auto trump = trump_suit(state.contract());
