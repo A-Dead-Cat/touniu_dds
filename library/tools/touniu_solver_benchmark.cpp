@@ -160,6 +160,8 @@ int main(int argc, char** argv)
         totals.table_hits += stats.table_hits;
         totals.collision_rejections += stats.collision_rejections;
         totals.cutoffs += stats.cutoffs;
+        totals.pvs_null_windows += stats.pvs_null_windows;
+        totals.pvs_researches += stats.pvs_researches;
     }
 
     const double average_ms = total_ms / args.samples;
@@ -167,7 +169,8 @@ int main(int argc, char** argv)
         "{\"cards\":%d,\"samples\":%d,\"seed\":%u,\"legacy\":%s,"
         "\"average_ms\":%.3f,\"min_ms\":%.3f,\"max_ms\":%.3f,"
         "\"nodes\":%llu,\"table_queries\":%llu,\"table_hits\":%llu,"
-        "\"collision_rejections\":%llu,\"cutoffs\":%llu}\n",
+        "\"collision_rejections\":%llu,\"cutoffs\":%llu,"
+        "\"pvs_null_windows\":%llu,\"pvs_researches\":%llu}\n",
         args.cards,
         args.samples,
         args.seed,
@@ -179,6 +182,8 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(totals.table_queries),
         static_cast<unsigned long long>(totals.table_hits),
         static_cast<unsigned long long>(totals.collision_rejections),
-        static_cast<unsigned long long>(totals.cutoffs));
+        static_cast<unsigned long long>(totals.cutoffs),
+        static_cast<unsigned long long>(totals.pvs_null_windows),
+        static_cast<unsigned long long>(totals.pvs_researches));
     return 0;
 }

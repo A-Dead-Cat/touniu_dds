@@ -154,6 +154,7 @@ TEST(SearchTest, SharedActionAnalysisMatchesTheOracle)
     EXPECT_GT(stats.nodes, 0U);
     EXPECT_GT(stats.table_queries, 0U);
     EXPECT_GT(stats.table_hits, 0U);
+    EXPECT_GT(stats.pvs_null_windows, 0U);
 
     for (const ActionAnalysis& analysis : analyses) {
         auto forced = *Position::create(scenario);
@@ -214,7 +215,7 @@ TEST(SearchTest, SharedActionAnalysisHandlesPartialTricksAndEffects)
     EXPECT_EQ(position.current_trick().size(), 1U);
 }
 
-TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
+auto check_seeded_deals(const SearchOptions& options) -> void
 {
     // 16 normal cards: four ranks in four suits, dealt four per seat. Different
     // play orders reach positions whose only difference is which seat of a
@@ -255,8 +256,8 @@ TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
         }
 
         auto position = *Position::create(scenario);
-        const std::vector<ActionAnalysis> analyses = analyze_actions(
-            position, Partnership::NorthSouth, SearchOptions{true, true, nullptr});
+        const std::vector<ActionAnalysis> analyses =
+            analyze_actions(position, Partnership::NorthSouth, options);
 
         ASSERT_FALSE(analyses.empty());
         for (const ActionAnalysis& analysis : analyses) {
@@ -266,6 +267,16 @@ TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
                 << "deal " << deal_index;
         }
     }
+}
+
+TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
+{
+    check_seeded_deals(SearchOptions{true, true, nullptr, false});
+}
+
+TEST(SearchTest, MtdActionAnalysisMatchesOracleOnSeededDeals)
+{
+    check_seeded_deals(SearchOptions{true, true, nullptr, true});
 }
 
 }  // namespace

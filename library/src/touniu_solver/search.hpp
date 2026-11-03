@@ -20,12 +20,18 @@ struct SearchStats {
     std::uint64_t table_hits = 0;
     std::uint64_t collision_rejections = 0;
     std::uint64_t cutoffs = 0;
+    std::uint64_t pvs_null_windows = 0;
+    std::uint64_t pvs_researches = 0;
 };
 
 struct SearchOptions {
     bool use_alpha_beta = true;
     bool use_transposition_table = true;
     SearchStats* stats = nullptr;
+    // Per-action analysis converges with MTD(f) null-window probes, which the
+    // fixed benchmark preferred over a single PVS window (lower p95). Set to
+    // false to use the single-window PVS driver instead.
+    bool use_mtd = true;
 };
 
 struct SearchResult {

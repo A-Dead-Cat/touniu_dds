@@ -1,6 +1,8 @@
 #include "search.hpp"
 
 #include <algorithm>
+#include <cassert>
+#include <cstddef>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -50,6 +52,33 @@ auto transposition_slots(const std::uint32_t tricks) -> std::size_t
     return 1U << 24U;
 }
 
+enum class Bound {
+    Exact,
+    Lower,
+    Upper,
+};
+
+struct SearchValue {
+    int value = 0;
+    Bound bound = Bound::Exact;
+};
+
+struct ChildResult {
+    SearchValue value;
+    std::optional<Action> best_action;
+};
+
+auto classify(const int value, const int alpha, const int beta) -> Bound
+{
+    if (value <= alpha) {
+        return Bound::Upper;
+    }
+    if (value >= beta) {
+        return Bound::Lower;
+    }
+    return Bound::Exact;
+}
+
 class SearchContext {
 public:
     SearchContext(
@@ -66,37 +95,16 @@ public:
 
     auto solve(Position& position) -> SearchResult
     {
+        const int low = score(position, target_);
         if (position.is_finished()) {
-            return {score(position, target_), std::nullopt};
+            return {low, std::nullopt};
         }
-
-        const bool maximizing = partnership(position.next_player()) == target_;
-        SearchResult result{
-            maximizing ? std::numeric_limits<int>::min()
-                       : std::numeric_limits<int>::max(),
-            std::nullopt,
-        };
-        int alpha = std::numeric_limits<int>::min();
-        int beta = std::numeric_limits<int>::max();
-        ActionList& actions = buffer(position);
-        position.legal_actions_into(actions);
-        for (std::size_t index = 0; index < actions.size(); ++index) {
-            const Action action = actions[index];
-            position.apply_known_legal(action);
-            const int value = evaluate(position, alpha, beta);
-            position.undo();
-            if (!result.best_action.has_value() ||
-                (maximizing ? value > result.tricks : value < result.tricks)) {
-                result.tricks = value;
-                result.best_action = action;
-            }
-            if (maximizing) {
-                alpha = std::max(alpha, result.tricks);
-            } else {
-                beta = std::min(beta, result.tricks);
-            }
-        }
-        return result;
+        const int high = low + static_cast<int>(position.tricks_remaining());
+        // The root window strictly contains every possible value, so the
+        // returned result is exact.
+        const ChildResult result =
+            search_children(position, low - 1, high + 1, low, high);
+        return {result.value.value, result.best_action};
     }
 
     auto analyze(Position& position) -> std::vector<ActionAnalysis>
@@ -111,26 +119,87 @@ public:
         for (std::size_t index = 0; index < actions.size(); ++index) {
             const Action action = actions[index];
             position.apply_known_legal(action);
-            // Every displayed action gets its own full window so sibling
-            // cutoffs can never leak into its value.
-            const int value = evaluate(
-                position,
-                std::numeric_limits<int>::min(),
-                std::numeric_limits<int>::max());
+            const int low = score(position, target_);
+            const int high = low + static_cast<int>(position.tricks_remaining());
+            // Every displayed action gets its own full natural window so
+            // sibling cutoffs can never leak into its value.
+            const SearchValue value = options_.use_mtd
+                ? mtd_value(position, low, high)
+                : evaluate(position, low - 1, high + 1);
             position.undo();
-            results.push_back({action, value});
+            // The window strictly spans every possible value, so a displayed
+            // action can only be backed by an exact result.
+            assert(value.bound == Bound::Exact);
+            results.push_back({action, value.value});
         }
         return results;
     }
 
 private:
-    auto evaluate(Position& position, int alpha, int beta) -> int
+    auto buffer(const Position& position) -> ActionList&
+    {
+        return action_buffers_[search_depth(position)];
+    }
+
+    void store_value(
+        const PositionIdentity identity,
+        const std::uint32_t depth,
+        const std::optional<int> exact,
+        const std::optional<int> lower,
+        const std::optional<int> upper,
+        const std::optional<Action>& best_action)
+    {
+        if (!options_.use_transposition_table || depth == 0U) {
+            return;
+        }
+        table_.store(identity, depth, exact, lower, upper, best_action);
+    }
+
+    // MTD(f): converge on the exact value with repeated null-window searches.
+    // Only an exact result is returned; every update uses fail-soft bounds.
+    auto mtd_value(Position& position, int lower, int upper) -> SearchValue
+    {
+        int guess = (lower + upper) / 2;
+        const PositionIdentity identity = position.identity();
+        if (options_.use_transposition_table) {
+            const TranspositionTable::Probe probe = table_.probe(identity);
+            if (probe.entry != nullptr && probe.entry->exact.has_value()) {
+                const int exact = *probe.entry->exact;
+                if (exact >= lower && exact <= upper) {
+                    guess = exact;
+                }
+            }
+        }
+
+        for (int iteration = 0; iteration < 64 && lower < upper; ++iteration) {
+            const int beta = guess == lower ? guess + 1 : guess;
+            if (options_.stats != nullptr) {
+                ++options_.stats->pvs_null_windows;
+            }
+            const SearchValue result = evaluate(position, beta - 1, beta);
+            if (result.bound == Bound::Exact) {
+                return result;
+            }
+            if (result.bound == Bound::Lower) {
+                lower = std::max(lower, result.value);
+            } else {
+                upper = std::min(upper, result.value);
+            }
+            guess = result.value;
+        }
+        assert(lower == upper);
+        return {lower, Bound::Exact};
+    }
+
+    auto evaluate(Position& position, int alpha, int beta) -> SearchValue
     {
         if (options_.stats != nullptr) {
             ++options_.stats->nodes;
         }
-        if (position.is_finished()) {
-            return score(position, target_);
+        const int low = score(position, target_);
+        const int high = low + static_cast<int>(position.tricks_remaining());
+        if (low == high) {
+            return {low, Bound::Exact};
         }
 
         const std::uint32_t depth = search_depth(position);
@@ -154,7 +223,10 @@ private:
                     ++options_.stats->table_hits;
                 }
                 if (cached->exact.has_value()) {
-                    return *cached->exact;
+                    return {
+                        *cached->exact,
+                        classify(*cached->exact, caller_alpha, caller_beta),
+                    };
                 }
                 if (prune && cached->lower.has_value()) {
                     alpha = std::max(alpha, *cached->lower);
@@ -166,15 +238,53 @@ private:
                     if (options_.stats != nullptr) {
                         ++options_.stats->cutoffs;
                     }
-                    return cached->lower.has_value() ? *cached->lower : *cached->upper;
+                    if (cached->lower.has_value() && *cached->lower >= beta) {
+                        return {*cached->lower, Bound::Lower};
+                    }
+                    return {*cached->upper, Bound::Upper};
                 }
             }
         }
 
+        if (prune && high <= alpha) {
+            store_value(identity, depth, std::nullopt, std::nullopt, high, std::nullopt);
+            return {high, Bound::Upper};
+        }
+        if (prune && low >= beta) {
+            store_value(identity, depth, std::nullopt, low, std::nullopt, std::nullopt);
+            return {low, Bound::Lower};
+        }
+
+        const ChildResult result =
+            search_children(position, alpha, beta, low, high, cached);
+        store_value(
+            identity,
+            depth,
+            result.value.bound == Bound::Exact
+                ? std::optional<int>{result.value.value} : std::nullopt,
+            result.value.bound == Bound::Lower
+                ? std::optional<int>{result.value.value} : std::nullopt,
+            result.value.bound == Bound::Upper
+                ? std::optional<int>{result.value.value} : std::nullopt,
+            result.best_action);
+        return result.value;
+    }
+
+    auto search_children(
+        Position& position,
+        const int alpha,
+        const int beta,
+        const int low,
+        const int high,
+        const TranspositionEntry* cached = nullptr) -> ChildResult
+    {
+        const bool prune = options_.use_alpha_beta;
         const bool maximizing = partnership(position.next_player()) == target_;
-        int best = maximizing ? std::numeric_limits<int>::min()
-                              : std::numeric_limits<int>::max();
+        int working_alpha = alpha;
+        int working_beta = beta;
+        int best = maximizing ? low : high;
         std::optional<Action> best_action;
+
         ActionList& actions = buffer(position);
         position.legal_actions_into(actions);
         if (cached != nullptr && cached->best_action.has_value()) {
@@ -185,22 +295,51 @@ private:
             }
         }
 
+        bool first = true;
         for (std::size_t index = 0; index < actions.size(); ++index) {
             const Action action = actions[index];
             position.apply_known_legal(action);
-            const int value = evaluate(position, alpha, beta);
+
+            int value = 0;
+            if (!prune || first) {
+                value = evaluate(position, working_alpha, working_beta).value;
+                first = false;
+            } else if (maximizing) {
+                if (options_.stats != nullptr) {
+                    ++options_.stats->pvs_null_windows;
+                }
+                value = evaluate(position, working_alpha, working_alpha + 1).value;
+                if (value > working_alpha && value < working_beta) {
+                    if (options_.stats != nullptr) {
+                        ++options_.stats->pvs_researches;
+                    }
+                    value = evaluate(position, working_alpha, working_beta).value;
+                }
+            } else {
+                if (options_.stats != nullptr) {
+                    ++options_.stats->pvs_null_windows;
+                }
+                value = evaluate(position, working_beta - 1, working_beta).value;
+                if (value < working_beta && value > working_alpha) {
+                    if (options_.stats != nullptr) {
+                        ++options_.stats->pvs_researches;
+                    }
+                    value = evaluate(position, working_alpha, working_beta).value;
+                }
+            }
             position.undo();
+
             if (!best_action.has_value() ||
                 (maximizing ? value > best : value < best)) {
                 best = value;
                 best_action = action;
             }
             if (maximizing) {
-                alpha = std::max(alpha, best);
+                working_alpha = std::max(working_alpha, best);
             } else {
-                beta = std::min(beta, best);
+                working_beta = std::min(working_beta, best);
             }
-            if (prune && alpha >= beta) {
+            if (prune && working_alpha >= working_beta) {
                 if (options_.stats != nullptr) {
                     ++options_.stats->cutoffs;
                 }
@@ -208,27 +347,7 @@ private:
             }
         }
 
-        if (options_.use_transposition_table) {
-            std::optional<int> exact;
-            std::optional<int> lower;
-            std::optional<int> upper;
-            if (!prune) {
-                exact = best;
-            } else if (best <= caller_alpha) {
-                upper = best;
-            } else if (best >= caller_beta) {
-                lower = best;
-            } else {
-                exact = best;
-            }
-            table_.store(identity, depth, exact, lower, upper, best_action);
-        }
-        return best;
-    }
-
-    auto buffer(const Position& position) -> ActionList&
-    {
-        return action_buffers_[search_depth(position)];
+        return {{best, classify(best, alpha, beta)}, best_action};
     }
 
     Partnership target_;
@@ -268,7 +387,8 @@ auto analyze_actions(
 auto analyze_actions(
     Position& position,
     Partnership target,
-    const SearchOptions& options) -> std::vector<ActionAnalysis>
+    const SearchOptions& options)
+    -> std::vector<ActionAnalysis>
 {
     SearchContext context(
         target,
