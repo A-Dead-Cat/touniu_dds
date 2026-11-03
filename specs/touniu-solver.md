@@ -116,6 +116,19 @@ choice when a card can legally be played.
   sequence position, current trick, winner bookkeeping, direction and pending
   effects exactly after exploring each child. No mutable state may leak between
   sibling branches.
+- One action-analysis request shares a single transposition table across all
+  displayed actions. Entries are keyed by a primary identity and accepted only
+  when a second independent verifier matches; a collision is rejected, never
+  merged.
+- Every displayed action is evaluated from its own full
+  `(-infinity, +infinity)` window. Alpha-beta and stored bounds are internal to
+  the search; sibling cutoffs never narrow another action's window, and only an
+  exact result is reported as that action's value.
+- The position identity used by the table is maintained incrementally from
+  applied and undone actions and includes each seat's own win count. Positions
+  that differ only in which partner won an earlier trick are therefore not
+  interchangeable. Tests compare the maintained identity with a full
+  recomputation after every apply and undo.
 - The standard DDS `Pos`, `Moves`, rank-bitmask holdings and DDS transposition
   table are not inputs to this solver. Their fixed four-suit, 13-rank and
   equal-hand-size invariants make reuse unsound. The new solver may share DDS's
