@@ -1,8 +1,12 @@
 #include <touniu_solver/c_api.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
+#include <vector>
 
 #include <touniu_solver/api.hpp>
+#include <touniu_solver/live_position.hpp>
 
 namespace {
 
@@ -65,6 +69,79 @@ auto make_card(const TouniuCardInput& input) -> std::optional<Card>
     case TOUNIU_CARD_THREE_SUIT_CAT:
         return input.suit == TOUNIU_SUIT_NONE
             ? std::optional(Card::three_suit_cat(id)) : std::nullopt;
+    default:
+        return std::nullopt;
+    }
+}
+
+auto decode_suit_mask(const std::uint32_t mask) -> std::vector<Suit>
+{
+    std::vector<Suit> suits;
+    for (std::uint32_t suit = 0; suit <= TOUNIU_SUIT_NO_TRUMP; ++suit) {
+        if ((mask & (1U << suit)) != 0U) {
+            suits.push_back(static_cast<Suit>(suit));
+        }
+    }
+    return suits;
+}
+
+auto has_only_normal_suits(const std::vector<Suit>& suits) -> bool
+{
+    return std::all_of(suits.begin(), suits.end(), [](const Suit suit) {
+        return suit != Suit::NoTrump;
+    });
+}
+
+auto make_live_card(const TouniuLiveCard& input) -> std::optional<Card>
+{
+    const CardId id{input.id};
+    const auto rank = Rank::from_millionths(input.rank_millionths);
+    const std::vector<Suit> suits = decode_suit_mask(input.suit_mask);
+
+    switch (input.kind) {
+    case TOUNIU_CARD_NORMAL:
+        if (suits.size() != 1U || suits.front() == Suit::NoTrump ||
+            !rank.has_value() ||
+            input.rank_millionths % 1'000'000 != 0 ||
+            input.rank_millionths > 14'000'000) {
+            return std::nullopt;
+        }
+        return Card::normal(id, suits.front(), *rank);
+    case TOUNIU_CARD_FLOATING: {
+        const auto floating_rank = Rank::floating(input.rank_millionths);
+        if (suits.size() != 1U || suits.front() == Suit::NoTrump ||
+            !floating_rank.has_value()) {
+            return std::nullopt;
+        }
+        return Card::floating(id, suits.front(), *floating_rank);
+    }
+    case TOUNIU_CARD_FOUR_SUIT:
+        if (suits.size() != 4U || !has_only_normal_suits(suits) ||
+            !rank.has_value() || input.rank_millionths > 14'999'999) {
+            return std::nullopt;
+        }
+        return Card::four_suit(id, *rank);
+    case TOUNIU_CARD_BLOCK:
+    case TOUNIU_CARD_REVERSE:
+    case TOUNIU_CARD_PLUS_TWO:
+    case TOUNIU_CARD_CHERRY_BOMB:
+        if ((suits.size() != 1U && suits.size() != 4U) ||
+            !has_only_normal_suits(suits)) {
+            return std::nullopt;
+        }
+        return Card::special(id, static_cast<CardKind>(input.kind), suits);
+    case TOUNIU_CARD_NO_TRUMP:
+        if (suits.size() != 1U || suits.front() != Suit::NoTrump ||
+            !rank.has_value()) {
+            return std::nullopt;
+        }
+        return Card::no_trump(id, *rank);
+    case TOUNIU_CARD_BIG_JOKER:
+        return suits.empty() ? std::optional(Card::big_joker(id)) : std::nullopt;
+    case TOUNIU_CARD_SMALL_JOKER:
+        return suits.empty() ? std::optional(Card::small_joker(id)) : std::nullopt;
+    case TOUNIU_CARD_THREE_SUIT_CAT:
+        return suits.empty() ? std::optional(Card::three_suit_cat(id)) : std::nullopt;
     default:
         return std::nullopt;
     }
@@ -146,6 +223,156 @@ extern "C" auto touniu_solver_solve(
             output->effective_suit =
                 static_cast<std::int32_t>(*action.effective_suit());
         }
+    }
+    return TOUNIU_SOLVER_OK;
+}
+
+namespace {
+
+auto analyze_actions_request_is_valid(const TouniuAnalyzeRequest& request) -> bool
+{
+    if (request.next_player < TOUNIU_SEAT_WEST ||
+        request.next_player > TOUNIU_SEAT_SOUTH ||
+        request.direction < TOUNIU_DIRECTION_FORWARD ||
+        request.direction > TOUNIU_DIRECTION_REVERSE ||
+        request.contract < TOUNIU_CONTRACT_SPADES ||
+        request.contract > TOUNIU_CONTRACT_NO_TRUMP ||
+        request.target_partnership < TOUNIU_PARTNERSHIP_NORTH_SOUTH ||
+        request.target_partnership > TOUNIU_PARTNERSHIP_EAST_WEST ||
+        request.tricks_won == nullptr ||
+        (request.card_count != 0U && request.cards == nullptr) ||
+        (request.current_trick_count != 0U && request.current_trick == nullptr) ||
+        request.hand_counts == nullptr ||
+        (request.generated_card_id_count != 0U &&
+         request.generated_card_ids == nullptr)) {
+        return false;
+    }
+    if (request.has_pending_block != 0U &&
+        (request.pending_block_seat < TOUNIU_SEAT_WEST ||
+         request.pending_block_seat > TOUNIU_SEAT_SOUTH)) {
+        return false;
+    }
+    std::uint32_t hand_cards = 0U;
+    for (std::uint32_t seat = 0; seat < 4U; ++seat) {
+        hand_cards += request.hand_counts[seat];
+    }
+    return hand_cards == 0U || request.hand_card_ids != nullptr;
+}
+
+auto decode_live_position(const TouniuAnalyzeRequest& request)
+    -> std::optional<LivePosition>
+{
+    LivePosition live;
+    live.next_player = static_cast<Seat>(request.next_player);
+    live.direction = static_cast<Direction>(request.direction);
+    live.contract = static_cast<Contract>(request.contract);
+    live.tricks_remaining = request.tricks_remaining;
+    live.seed = request.seed;
+    live.trick_start_draw_index = request.trick_start_draw_index;
+    live.draw_index = request.draw_index;
+    live.valid_reverse_count = request.valid_reverse_count;
+    if (request.has_pending_block != 0U) {
+        live.pending_block = static_cast<Seat>(request.pending_block_seat);
+    }
+    for (std::uint32_t seat = 0; seat < 4U; ++seat) {
+        live.tricks_won[seat] = request.tricks_won[seat];
+    }
+
+    for (std::uint32_t index = 0; index < request.card_count; ++index) {
+        auto card = make_live_card(request.cards[index]);
+        if (!card.has_value()) {
+            return std::nullopt;
+        }
+        live.cards.push_back(*card);
+    }
+
+    std::uint32_t hand_index = 0U;
+    for (std::uint32_t seat = 0; seat < 4U; ++seat) {
+        for (std::uint32_t index = 0; index < request.hand_counts[seat]; ++index) {
+            live.hands[seat].push_back(CardId{request.hand_card_ids[hand_index++]});
+        }
+    }
+
+    for (std::uint32_t index = 0; index < request.current_trick_count; ++index) {
+        const TouniuLiveTrickPlay& input = request.current_trick[index];
+        LiveTrickPlay play;
+        play.seat = static_cast<Seat>(input.seat);
+        play.is_pass = input.is_pass != 0U;
+        play.card_id = CardId{input.card_id};
+        if (input.mode != TOUNIU_PLAY_NONE) {
+            play.mode = static_cast<PlayMode>(input.mode);
+        }
+        if (input.effective_suit != TOUNIU_SUIT_NONE) {
+            play.effective_suit = static_cast<Suit>(input.effective_suit);
+        }
+        live.current_trick.push_back(play);
+    }
+
+    for (std::uint32_t index = 0; index < request.generated_card_id_count; ++index) {
+        live.current_trick_generated_card_ids.push_back(
+            CardId{request.generated_card_ids[index]});
+    }
+    return live;
+}
+
+}  // namespace
+
+extern "C" auto touniu_solver_analyze_actions_v2(
+    const TouniuAnalyzeRequest* request,
+    TouniuAnalyzeAction* records,
+    const std::uint32_t record_capacity,
+    std::uint32_t* required_count) -> std::int32_t
+{
+    if (required_count == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    *required_count = 0U;
+    if (request == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    if (request->abi_version != TOUNIU_SOLVER_ABI_VERSION_V2) {
+        return TOUNIU_SOLVER_UNSUPPORTED_VERSION;
+    }
+    if (!analyze_actions_request_is_valid(*request)) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    const auto live = decode_live_position(*request);
+    if (!live.has_value()) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    auto position = Position::create(*live);
+    if (!position.has_value()) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    const std::vector<ActionAnalysis> analyses = analyze_actions(
+        *position,
+        static_cast<Partnership>(request->target_partnership),
+        request->use_alpha_beta != 0U);
+
+    const std::uint32_t count = static_cast<std::uint32_t>(analyses.size());
+    *required_count = count;
+    if (records == nullptr || record_capacity < count) {
+        return TOUNIU_SOLVER_BUFFER_TOO_SMALL;
+    }
+
+    for (std::uint32_t index = 0; index < count; ++index) {
+        const Action& action = analyses[index].action;
+        TouniuAnalyzeAction& output = records[index];
+        output = {};
+        output.is_pass = action.is_pass() ? 1U : 0U;
+        if (action.is_pass()) {
+            output.card_id = 0U;
+            output.mode = TOUNIU_PLAY_NONE;
+            output.effective_suit = TOUNIU_SUIT_NONE;
+        } else {
+            output.card_id = action.card_id()->value;
+            output.mode = static_cast<std::int32_t>(*action.mode());
+            output.effective_suit = static_cast<std::int32_t>(*action.effective_suit());
+        }
+        output.final_tricks = analyses[index].final_tricks;
     }
     return TOUNIU_SOLVER_OK;
 }

@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 #define TOUNIU_SOLVER_ABI_VERSION 1U
+#define TOUNIU_SOLVER_ABI_VERSION_V2 2U
 
 enum TouniuSolverError {
     TOUNIU_SOLVER_OK = 0,
@@ -14,6 +15,7 @@ enum TouniuSolverError {
     TOUNIU_SOLVER_UNSUPPORTED_VERSION = 2,
     TOUNIU_SOLVER_INVALID_REQUEST = 3,
     TOUNIU_SOLVER_INVALID_CARD = 4,
+    TOUNIU_SOLVER_BUFFER_TOO_SMALL = 5,
 };
 
 enum TouniuSeat {
@@ -108,6 +110,74 @@ typedef struct TouniuSolveOutput {
 int32_t touniu_solver_solve(
     const TouniuSolveRequest* request,
     TouniuSolveOutput* output
+);
+
+/*
+ * ABI v2: analyze every legal action of an already-partially-played position.
+ * `suit_mask` is a bit set over TouniuSuit (1 << suit) encoding the card's
+ * intrinsic suits. Hands are id references into `cards`, flattened in
+ * W, N, E, S order with per-seat `hand_counts`.
+ */
+typedef struct TouniuLiveCard {
+    uint64_t id;
+    int32_t kind;
+    int32_t rank_millionths;
+    uint32_t suit_mask;
+} TouniuLiveCard;
+
+typedef struct TouniuLiveTrickPlay {
+    int32_t seat;
+    uint8_t is_pass;
+    uint64_t card_id;
+    int32_t mode;
+    int32_t effective_suit;
+} TouniuLiveTrickPlay;
+
+typedef struct TouniuAnalyzeRequest {
+    uint32_t abi_version;
+    const TouniuLiveCard* cards;
+    uint32_t card_count;
+    const uint64_t* hand_card_ids;
+    const uint32_t* hand_counts;
+    const TouniuLiveTrickPlay* current_trick;
+    uint32_t current_trick_count;
+    int32_t next_player;
+    int32_t direction;
+    int32_t contract;
+    int32_t target_partnership;
+    uint32_t tricks_remaining;
+    const uint32_t* tricks_won;
+    uint8_t has_pending_block;
+    int32_t pending_block_seat;
+    uint32_t valid_reverse_count;
+    uint32_t seed;
+    uint64_t trick_start_draw_index;
+    uint64_t draw_index;
+    const uint64_t* generated_card_ids;
+    uint32_t generated_card_id_count;
+    uint8_t use_alpha_beta;
+} TouniuAnalyzeRequest;
+
+typedef struct TouniuAnalyzeAction {
+    uint8_t is_pass;
+    uint64_t card_id;
+    int32_t mode;
+    int32_t effective_suit;
+    int32_t final_tricks;
+} TouniuAnalyzeAction;
+
+/*
+ * Writes one record per legal action into `records` (capacity `record_capacity`).
+ * A null or undersized buffer writes nothing, stores the true count in
+ * `*required_count`, and returns TOUNIU_SOLVER_BUFFER_TOO_SMALL. On success
+ * exactly `*required_count` records are written. `required_count` must not be
+ * null. Returns TOUNIU_SOLVER_OK on success.
+ */
+int32_t touniu_solver_analyze_actions_v2(
+    const TouniuAnalyzeRequest* request,
+    TouniuAnalyzeAction* records,
+    uint32_t record_capacity,
+    uint32_t* required_count
 );
 
 #ifdef __cplusplus

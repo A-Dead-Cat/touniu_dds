@@ -120,5 +120,8 @@ cc_library(
     local_defines = DDS_LOCAL_DEFINES,
     include_prefix = "touniu_solver",
     visibility = ["//visibility:public"],
-    deps = [":api"],
+    deps = [
+        ":api",
+        ":live_position",
+    ],
 )
