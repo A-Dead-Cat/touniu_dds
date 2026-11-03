@@ -101,6 +101,10 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
                  card->kind() == CardKind::ThreeSuitCat)) {
                 continue;
             }
+            if (card->kind() == CardKind::ThreeSuitCat) {
+                actions.push_back(Action::play(id, PlayMode::Lead, Suit::NoTrump));
+                continue;
+            }
             actions.push_back(Action::play(
                 id,
                 PlayMode::Lead,
@@ -122,9 +126,36 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
                ) != card->intrinsic_suits().end();
     });
 
+    if (state.contract() == Contract::NoTrump && *led_suit != Suit::NoTrump &&
+        !has_led_suit) {
+        const auto cat = std::find_if(hand.begin(), hand.end(), [&](const CardId id) {
+            return state.card(id)->kind() == CardKind::ThreeSuitCat;
+        });
+        if (cat != hand.end()) {
+            return {Action::play(*cat, PlayMode::Follow, *led_suit)};
+        }
+    }
+
     for (const CardId id : hand) {
         const Card* card = state.card(id);
         assert(card != nullptr);
+        if (card->kind() == CardKind::ThreeSuitCat) {
+            if (state.contract() == Contract::NoTrump) {
+                continue;
+            }
+            const auto trump = trump_suit(state.contract());
+            if (*led_suit == Suit::NoTrump || (trump.has_value() && *led_suit == *trump)) {
+                if (!has_led_suit) {
+                    actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+                }
+            } else {
+                actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
+                if (!has_led_suit) {
+                    actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+                }
+            }
+            continue;
+        }
         if (card->kind() == CardKind::FourSuit && !has_led_suit) {
             actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
             actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));

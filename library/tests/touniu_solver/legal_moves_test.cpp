@@ -186,5 +186,39 @@ TEST(LegalMovesTest, FourSuitCardDoesNotCreateASeparateTrumpChoiceWhenTrumpLeads
     );
 }
 
+TEST(LegalMovesTest, SuitContractCatMayFollowOrDiscardWhenVoidInNonTrumpLead)
+{
+    Scenario scenario;
+    scenario.contract = Contract::Hearts;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::three_suit_cat(CardId{1}), normal_card(2, Suit::Clubs, 3)};
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const auto actions = legal_actions(*state, trick);
+    EXPECT_NE(std::find(actions.begin(), actions.end(),
+        Action::play(CardId{1}, PlayMode::Follow, Suit::Spades)), actions.end());
+    EXPECT_NE(std::find(actions.begin(), actions.end(),
+        Action::play(CardId{1}, PlayMode::Discard, Suit::NoTrump)), actions.end());
+}
+
+TEST(LegalMovesTest, NoTrumpCatMustFollowBeforeOtherDiscardsWhenVoid)
+{
+    Scenario scenario;
+    scenario.contract = Contract::NoTrump;
+    scenario.next_player = Seat::North;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::three_suit_cat(CardId{1}), normal_card(2, Suit::Clubs, 3)};
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::West, Action::play(CardId{3}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const auto actions = legal_actions(*state, trick);
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(actions.front(), Action::play(CardId{1}, PlayMode::Follow, Suit::Spades));
+}
+
 }  // namespace
 }  // namespace touniu_solver
