@@ -53,6 +53,17 @@ auto transposition_slots(const std::uint32_t tricks) -> std::size_t
     return 1U << 24U;
 }
 
+auto is_plain_card(const Card& card) -> bool
+{
+    return (card.kind() == CardKind::Normal || card.kind() == CardKind::Floating) &&
+           card.intrinsic_suits().size() == 1U;
+}
+
+auto rank_between(const Card& card, const Card& left, const Card& right) -> bool
+{
+    return card.rank() > left.rank() && card.rank() < right.rank();
+}
+
 enum class Bound {
     Exact,
     Lower,
@@ -91,6 +102,7 @@ public:
           options_(options),
           table_(table_slots),
           action_buffers_(buffer_count),
+          merge_buffers_(buffer_count),
           main_variation_(buffer_count),
           killers_(buffer_count)
     {
@@ -295,10 +307,31 @@ private:
         position.legal_actions_into(actions);
         order_actions(actions, depth, cached);
 
+        ActionList& representatives = merge_buffers_[depth];
+        representatives.clear();
+        bool merged_any = false;
+
         bool first = true;
         std::size_t ordered_position = 0;
         for (std::size_t index = 0; index < actions.size(); ++index) {
             const Action action = actions[index];
+            if (options_.use_equivalent_pruning) {
+                bool merged = false;
+                for (const Action& representative : representatives) {
+                    if (actions_are_equivalent(position, representative, action)) {
+                        merged = true;
+                        break;
+                    }
+                }
+                if (merged) {
+                    if (options_.stats != nullptr) {
+                        ++options_.stats->equivalent_skips;
+                    }
+                    merged_any = true;
+                    continue;
+                }
+                representatives.push_back(action);
+            }
             position.apply_known_legal(action);
 
             int value = 0;
@@ -358,6 +391,9 @@ private:
             ++ordered_position;
         }
 
+        if (merged_any && options_.stats != nullptr) {
+            ++options_.stats->equivalent_groups;
+        }
         if (best_action.has_value()) {
             main_variation_[depth] = *best_action;
         }
@@ -442,11 +478,70 @@ private:
     SearchOptions options_;
     TranspositionTable table_;
     std::vector<ActionList> action_buffers_;
+    std::vector<ActionList> merge_buffers_;
     std::vector<std::optional<Action>> main_variation_;
     std::vector<std::array<std::optional<Action>, 2>> killers_;
 };
 
 }  // namespace
+
+auto actions_are_equivalent(
+    const Position& position,
+    const Action& left,
+    const Action& right) -> bool
+{
+    if (left.is_pass() || right.is_pass()) {
+        return false;
+    }
+    if (left.mode() != right.mode() ||
+        left.effective_suit() != right.effective_suit()) {
+        return false;
+    }
+    const Card* left_card = position.card(*left.card_id());
+    const Card* right_card = position.card(*right.card_id());
+    if (left_card == nullptr || right_card == nullptr) {
+        return false;
+    }
+    if (!is_plain_card(*left_card) || !is_plain_card(*right_card) ||
+        left_card->intrinsic_suits() != right_card->intrinsic_suits()) {
+        return false;
+    }
+
+    const Card& low = left_card->rank() < right_card->rank()
+        ? *left_card : *right_card;
+    const Card& high = left_card->rank() < right_card->rank()
+        ? *right_card : *left_card;
+
+    // Any special or extra-suit card that could still be compared disables the
+    // merge, as does a +2 whose future draws could land between the ranks.
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            if (id == left_card->id() || id == right_card->id()) {
+                continue;
+            }
+            const Card* card = position.card(id);
+            if (card == nullptr || !is_plain_card(*card)) {
+                return false;
+            }
+            if (rank_between(*card, low, high)) {
+                return false;
+            }
+        }
+    }
+    for (const TrickPlay& play : position.current_trick()) {
+        if (play.action.is_pass()) {
+            continue;
+        }
+        const Card* card = position.card(*play.action.card_id());
+        if (card == nullptr || !is_plain_card(*card)) {
+            return false;
+        }
+        if (rank_between(*card, low, high)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 auto solve(Position& position, Partnership target, bool use_alpha_beta)
     -> SearchResult

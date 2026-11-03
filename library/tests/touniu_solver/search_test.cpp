@@ -306,6 +306,137 @@ auto ordered_scenario(const int deal_index) -> Scenario
     return scenario;
 }
 
+auto lead_action(const std::uint64_t id) -> Action
+{
+    return Action::play(CardId{id}, PlayMode::Lead, Suit::Spades);
+}
+
+auto equivalence_scenario() -> Scenario
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 1;
+    scenario.hands[0] = {
+        Card::normal(CardId{1}, Suit::Spades, Rank::integer(9)),
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(8)),
+    };
+    scenario.hands[1] = {
+        Card::normal(CardId{3}, Suit::Hearts, Rank::integer(5)),
+    };
+    return scenario;
+}
+
+TEST(SearchTest, EquivalentCardsShareAResult)
+{
+    const auto position = Position::create(equivalence_scenario());
+    ASSERT_TRUE(position.has_value());
+    // Adjacent spade ranks with no card strictly between them.
+    EXPECT_TRUE(actions_are_equivalent(*position, lead_action(1), lead_action(2)));
+}
+
+TEST(SearchTest, EquivalentPredicateRejectsGapsAndMismatches)
+{
+    Scenario gapped = equivalence_scenario();
+    gapped.hands[1] = {
+        Card::normal(CardId{3}, Suit::Spades, Rank::integer(8)),
+        Card::normal(CardId{4}, Suit::Hearts, Rank::integer(5)),
+    };
+    // A spade 8 lies strictly between ranks 8 and 9 only if the candidates are
+    // 9 and 7; use a hand with 9 and 7 plus an intervening 8.
+    gapped.hands[0] = {
+        Card::normal(CardId{1}, Suit::Spades, Rank::integer(9)),
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(7)),
+    };
+    const auto gapped_position = Position::create(gapped);
+    ASSERT_TRUE(gapped_position.has_value());
+    EXPECT_FALSE(actions_are_equivalent(*gapped_position, lead_action(1), lead_action(2)));
+
+    // Different suits never merge.
+    Scenario suits = equivalence_scenario();
+    suits.hands[0][1] = Card::normal(CardId{2}, Suit::Hearts, Rank::integer(8));
+    const auto suits_position = Position::create(suits);
+    ASSERT_TRUE(suits_position.has_value());
+    EXPECT_FALSE(actions_are_equivalent(*suits_position, lead_action(1), lead_action(2)));
+
+    // A remaining +2 could generate a rank between the candidates.
+    Scenario plus_two = equivalence_scenario();
+    plus_two.hands[1] = {
+        Card::plus_two(CardId{3}, Suit::Spades),
+    };
+    const auto plus_two_position = Position::create(plus_two);
+    ASSERT_TRUE(plus_two_position.has_value());
+    EXPECT_FALSE(actions_are_equivalent(*plus_two_position, lead_action(1), lead_action(2)));
+
+    // Multi-suit specials always block the merge.
+    Scenario special = equivalence_scenario();
+    special.hands[1] = {
+        Card::four_suit(CardId{3}, Rank::integer(6)),
+    };
+    const auto special_position = Position::create(special);
+    ASSERT_TRUE(special_position.has_value());
+    EXPECT_FALSE(actions_are_equivalent(*special_position, lead_action(1), lead_action(2)));
+}
+
+TEST(SearchTest, EquivalentPruningKeepsExactValuesAndLowersNodes)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[0] = {
+        Card::normal(CardId{1}, Suit::Spades, Rank::integer(9)),
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(8)),
+    };
+    scenario.hands[1] = {
+        Card::normal(CardId{3}, Suit::Spades, Rank::integer(14)),
+        Card::normal(CardId{4}, Suit::Spades, Rank::integer(13)),
+    };
+    scenario.hands[2] = {
+        Card::normal(CardId{5}, Suit::Spades, Rank::integer(12)),
+        Card::normal(CardId{6}, Suit::Spades, Rank::integer(11)),
+    };
+    scenario.hands[3] = {
+        Card::normal(CardId{7}, Suit::Spades, Rank::integer(10)),
+        Card::normal(CardId{8}, Suit::Spades, Rank::integer(7)),
+    };
+
+    auto pruned = *Position::create(scenario);
+    auto plain = *Position::create(scenario);
+    SearchStats pruned_stats;
+    SearchStats plain_stats;
+    const SearchResult pruned_result = solve(
+        pruned, Partnership::NorthSouth, SearchOptions{true, true, &pruned_stats});
+    const SearchResult plain_result = solve(
+        plain,
+        Partnership::NorthSouth,
+        SearchOptions{true, true, &plain_stats, true, false});
+
+    EXPECT_EQ(pruned_result.tricks, plain_result.tricks);
+    EXPECT_EQ(pruned_result.best_action, plain_result.best_action);
+    EXPECT_GT(pruned_stats.equivalent_skips, 0U);
+    EXPECT_LT(pruned_stats.nodes, plain_stats.nodes);
+}
+
+TEST(SearchTest, EquivalentPruningKeepsEveryRootAction)
+{
+    const Scenario scenario = equivalence_scenario();
+    auto pruned = *Position::create(scenario);
+    auto plain = *Position::create(scenario);
+    const std::vector<ActionAnalysis> pruned_actions = analyze_actions(
+        pruned, Partnership::NorthSouth, SearchOptions{true, true, nullptr});
+    const std::vector<ActionAnalysis> plain_actions = analyze_actions(
+        plain,
+        Partnership::NorthSouth,
+        SearchOptions{true, true, nullptr, true, false});
+
+    ASSERT_EQ(pruned_actions.size(), plain_actions.size());
+    for (std::size_t index = 0; index < pruned_actions.size(); ++index) {
+        EXPECT_EQ(pruned_actions[index].action, plain_actions[index].action);
+        EXPECT_EQ(pruned_actions[index].final_tricks, plain_actions[index].final_tricks);
+    }
+}
+
 TEST(SearchTest, DeterministicOrderingKeepsCanonicalBestAction)
 {
     for (int deal_index = 0; deal_index < 4; ++deal_index) {

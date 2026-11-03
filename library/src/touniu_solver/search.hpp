@@ -27,6 +27,8 @@ struct SearchStats {
     std::uint64_t ordering_mv = 0;
     std::uint64_t ordering_killer = 0;
     std::uint64_t ordering_static = 0;
+    std::uint64_t equivalent_groups = 0;
+    std::uint64_t equivalent_skips = 0;
 };
 
 struct SearchOptions {
@@ -37,6 +39,9 @@ struct SearchOptions {
     // fixed benchmark preferred over a single PVS window (lower p95). Set to
     // false to use the single-window PVS driver instead.
     bool use_mtd = true;
+    // Interior nodes merge plain cards that are indistinguishable for every
+    // remaining comparison. The root of analyze_actions() is never merged.
+    bool use_equivalent_pruning = true;
 };
 
 struct SearchResult {
@@ -66,5 +71,13 @@ auto analyze_actions(
     Position& position,
     Partnership target,
     const SearchOptions& options) -> std::vector<ActionAnalysis>;
+
+// Conservative equivalence predicate used by the search. Exposed for tests; it
+// never reports equivalence when a special, multi-suit or +2 card remains able
+// to participate in a later comparison.
+auto actions_are_equivalent(
+    const Position& position,
+    const Action& left,
+    const Action& right) -> bool;
 
 }  // namespace touniu_solver

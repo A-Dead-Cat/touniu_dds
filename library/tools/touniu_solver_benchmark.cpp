@@ -165,6 +165,8 @@ int main(int argc, char** argv)
         totals.cutoffs += stats.cutoffs;
         totals.pvs_null_windows += stats.pvs_null_windows;
         totals.pvs_researches += stats.pvs_researches;
+        totals.equivalent_groups += stats.equivalent_groups;
+        totals.equivalent_skips += stats.equivalent_skips;
     }
 
     const double average_ms = total_ms / args.samples;
@@ -174,6 +176,7 @@ int main(int argc, char** argv)
         "\"nodes\":%llu,\"table_queries\":%llu,\"table_hits\":%llu,"
         "\"collision_rejections\":%llu,\"cutoffs\":%llu,"
         "\"pvs_null_windows\":%llu,\"pvs_researches\":%llu,"
+        "\"equivalent_groups\":%llu,\"equivalent_skips\":%llu,"
         "\"samples_nodes\":[",
         args.cards,
         args.samples,
@@ -188,7 +191,9 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(totals.collision_rejections),
         static_cast<unsigned long long>(totals.cutoffs),
         static_cast<unsigned long long>(totals.pvs_null_windows),
-        static_cast<unsigned long long>(totals.pvs_researches));
+        static_cast<unsigned long long>(totals.pvs_researches),
+        static_cast<unsigned long long>(totals.equivalent_groups),
+        static_cast<unsigned long long>(totals.equivalent_skips));
     for (std::size_t index = 0; index < sample_nodes.size(); ++index) {
         std::printf("%s%llu", index == 0 ? "" : ",", sample_nodes[index]);
     }
