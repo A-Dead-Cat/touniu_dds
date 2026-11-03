@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstdint>
+
 namespace touniu_solver {
 namespace {
 
@@ -63,6 +66,40 @@ TEST(StateTest, DrawsAdvanceDeterministicallyWithoutDuplicateEntity)
     EXPECT_NE(first_draw.id(), second_draw.id());
     EXPECT_EQ(mutable_state.hand(Seat::East).size(), 2U);
     EXPECT_EQ(mutable_state.draw_index(), 2U);
+}
+
+TEST(StateTest, KnownGeneratedSequenceMatchesBrowserContract)
+{
+    struct Sample {
+        std::uint32_t seed;
+        std::array<Suit, 3> suits;
+        std::array<std::int32_t, 3> rank_millionths;
+    };
+    const std::array<Sample, 3> samples{{
+        {0U,
+         {Suit::Hearts, Suit::Spades, Suit::Diamonds},
+         {1'720'431, 11'331'445, 11'527'019}},
+        {591601503U,
+         {Suit::Hearts, Suit::Diamonds, Suit::Hearts},
+         {14'473'826, 9'455'601, 8'405'380}},
+        {4'294'967'295U,
+         {Suit::Diamonds, Suit::Diamonds, Suit::Diamonds},
+         {8'119'011, 11'100'811, 14'994'961}},
+    }};
+
+    for (const Sample& sample : samples) {
+        Scenario scenario;
+        scenario.seed = sample.seed;
+        auto state = *State::create(scenario);
+        for (std::size_t index = 0; index < sample.suits.size(); ++index) {
+            const Card card = state.draw_floating(Seat::South);
+            ASSERT_EQ(card.intrinsic_suits().size(), 1U);
+            EXPECT_EQ(card.intrinsic_suits().front(), sample.suits[index]);
+            EXPECT_EQ(card.rank().millionths(), sample.rank_millionths[index]);
+            EXPECT_EQ(card.id().value, 0x8000000000000000ULL + index);
+        }
+        EXPECT_EQ(state.draw_index(), 3U);
+    }
 }
 
 TEST(StateTest, TrickLimitEndsGameWithoutDiscardingStoredHands)
