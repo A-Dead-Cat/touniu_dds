@@ -31,6 +31,7 @@ struct LivePosition {
     std::uint32_t seed = DefaultGenerationSeed;
     std::uint64_t trick_start_draw_index = 0;
     std::uint64_t draw_index = 0;
+    std::vector<CardId> current_trick_generated_card_ids;
 };
 
 namespace detail {

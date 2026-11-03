@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <limits>
 
 namespace touniu_solver {
@@ -64,6 +65,7 @@ auto valid_plus_two_position() -> LivePosition
     live.seed = 0;
     live.trick_start_draw_index = 0;
     live.draw_index = generator.draw_index();
+    live.current_trick_generated_card_ids = {first_draw.id(), second_draw.id()};
     return live;
 }
 
@@ -335,11 +337,90 @@ TEST(LivePositionTest, ImportsDeterministicPlusTwoDraws)
     EXPECT_EQ(position->draw_index(), live.draw_index);
 }
 
+TEST(LivePositionTest, PreservesPreexistingCardThatCollidesWithGeneratedId)
+{
+    constexpr std::uint64_t GeneratedIdBase = 0x8000000000000000ULL;
+    const Card collision = normal_card(GeneratedIdBase, Suit::Clubs, 2);
+    Scenario generator_scenario;
+    generator_scenario.seed = 0;
+    generator_scenario.hands[static_cast<std::size_t>(Seat::South)] = {collision};
+    auto generator = *State::create(generator_scenario);
+    const Card first_draw = generator.draw_floating(Seat::North);
+    const Card second_draw = generator.draw_floating(Seat::North);
+
+    LivePosition live;
+    live.cards = {
+        Card::plus_two(CardId{1}, Suit::Spades),
+        collision,
+        first_draw,
+        second_draw,
+    };
+    live.hands[static_cast<std::size_t>(Seat::North)] = {
+        first_draw.id(),
+        second_draw.id(),
+    };
+    live.hands[static_cast<std::size_t>(Seat::South)] = {collision.id()};
+    live.current_trick = {
+        {Seat::West, false, CardId{1}, PlayMode::Lead, Suit::Spades},
+    };
+    live.next_player = Seat::North;
+    live.contract = Contract::Spades;
+    live.tricks_remaining = 1;
+    live.seed = 0;
+    live.trick_start_draw_index = 0;
+    live.draw_index = generator.draw_index();
+    live.current_trick_generated_card_ids = {first_draw.id(), second_draw.id()};
+
+    const auto position = Position::create(live);
+
+    ASSERT_TRUE(position.has_value());
+    const Card* preserved = position->card(collision.id());
+    ASSERT_NE(preserved, nullptr);
+    EXPECT_EQ(preserved->kind(), CardKind::Normal);
+    EXPECT_EQ(position->hand(Seat::South), std::vector<CardId>({collision.id()}));
+    EXPECT_EQ(position->draw_index(), generator.draw_index());
+}
+
 TEST(LivePositionTest, RejectsPlusTwoWithMissingDrawnCards)
 {
     LivePosition live = valid_plus_two_position();
     live.cards.erase(live.cards.begin() + 1, live.cards.end());
     live.hands[static_cast<std::size_t>(Seat::North)].clear();
+
+    EXPECT_FALSE(Position::create(live).has_value());
+}
+
+TEST(LivePositionTest, RejectsMissingGeneratedCardProvenance)
+{
+    LivePosition live = valid_plus_two_position();
+    live.current_trick_generated_card_ids.clear();
+
+    EXPECT_FALSE(Position::create(live).has_value());
+}
+
+TEST(LivePositionTest, RejectsDuplicateGeneratedCardProvenance)
+{
+    LivePosition live = valid_plus_two_position();
+    live.current_trick_generated_card_ids.push_back(
+        live.current_trick_generated_card_ids.front());
+
+    EXPECT_FALSE(Position::create(live).has_value());
+}
+
+TEST(LivePositionTest, RejectsOutOfOrderGeneratedCardProvenance)
+{
+    LivePosition live = valid_plus_two_position();
+    std::reverse(
+        live.current_trick_generated_card_ids.begin(),
+        live.current_trick_generated_card_ids.end());
+
+    EXPECT_FALSE(Position::create(live).has_value());
+}
+
+TEST(LivePositionTest, RejectsNongeneratedCardProvenance)
+{
+    LivePosition live = valid_plus_two_position();
+    live.current_trick_generated_card_ids.front() = CardId{1};
 
     EXPECT_FALSE(Position::create(live).has_value());
 }

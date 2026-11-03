@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace touniu_solver {
 namespace {
@@ -148,12 +149,32 @@ auto has_consistent_trick_state(const LivePosition& live) -> bool
            reverse_count == live.valid_reverse_count;
 }
 
+auto has_valid_generation_provenance(const LivePosition& live) -> bool
+{
+    std::unordered_set<std::uint64_t> generated_ids;
+    std::optional<std::uint64_t> previous;
+    for (const CardId id : live.current_trick_generated_card_ids) {
+        if (!generated_ids.insert(id.value).second || find_card(live, id) == nullptr) {
+            return false;
+        }
+        // Generated IDs use an ever-increasing draw cursor, so a correctly
+        // ordered provenance lists them in strictly ascending ID order. A
+        // pre-existing catalog card may share the high ID range, but its ID
+        // never regresses the sequence of freshly generated cards.
+        if (previous.has_value() && id.value <= *previous) {
+            return false;
+        }
+        previous = id.value;
+    }
+    return true;
+}
+
 }  // namespace
 
 auto detail::has_valid_live_position_encoding(const LivePosition& live) -> bool
 {
     return has_valid_position_enums(live) && has_valid_catalog_ownership(live) &&
-           has_consistent_trick_state(live) &&
+           has_consistent_trick_state(live) && has_valid_generation_provenance(live) &&
            live.trick_start_draw_index <= live.draw_index;
 }
 

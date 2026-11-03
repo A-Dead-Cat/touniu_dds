@@ -9,8 +9,6 @@
 namespace touniu_solver {
 namespace {
 
-constexpr std::uint64_t GeneratedCardIdBase = 0x8000000000000000ULL;
-
 auto seat_index(const Seat seat) -> std::size_t
 {
     return static_cast<std::size_t>(seat);
@@ -26,9 +24,11 @@ auto generated_during_current_trick(
     const CardId id,
     const LivePosition& live) -> bool
 {
-    const std::uint64_t generation_index = id.value - GeneratedCardIdBase;
-    return generation_index >= live.trick_start_draw_index &&
-           generation_index < live.draw_index;
+    return std::find(
+        live.current_trick_generated_card_ids.begin(),
+        live.current_trick_generated_card_ids.end(),
+        id
+    ) != live.current_trick_generated_card_ids.end();
 }
 
 auto cards_match(const Card& left, const Card& right) -> bool
