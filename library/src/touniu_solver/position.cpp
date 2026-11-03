@@ -84,9 +84,19 @@ auto Position::draw_index() const -> std::uint64_t
     return state_.draw_index();
 }
 
+auto Position::seed() const -> std::uint32_t
+{
+    return state_.seed();
+}
+
 auto Position::valid_reverse_count() const -> std::uint32_t
 {
     return valid_reverse_count_;
+}
+
+auto Position::pending_block() const -> std::optional<Seat>
+{
+    return pending_block_;
 }
 
 auto Position::next_seat(const Seat seat) const -> Seat

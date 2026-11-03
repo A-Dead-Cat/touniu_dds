@@ -62,3 +62,27 @@ cc_library(
         ":trick_resolution",
     ],
 )
+
+cc_library(
+    name = "position_hash",
+    srcs = ["position_hash.cpp"],
+    hdrs = ["position_hash.hpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    include_prefix = "touniu_solver",
+    visibility = ["//visibility:public"],
+    deps = [":position"],
+)
+
+cc_library(
+    name = "search",
+    srcs = ["search.cpp"],
+    hdrs = ["search.hpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    include_prefix = "touniu_solver",
+    visibility = ["//visibility:public"],
+    deps = [":position_hash"],
+)
