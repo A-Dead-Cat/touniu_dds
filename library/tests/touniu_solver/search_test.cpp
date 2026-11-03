@@ -269,6 +269,62 @@ auto check_seeded_deals(const SearchOptions& options) -> void
     }
 }
 
+auto ordered_scenario(const int deal_index) -> Scenario
+{
+    constexpr std::array<Suit, 4> suits = {
+        Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs};
+    constexpr std::array<int, 4> ranks = {14, 13, 12, 11};
+    std::uint32_t random_state =
+        0x9E3779B9U + static_cast<std::uint32_t>(deal_index) * 2654435761U;
+    const auto next_random = [&random_state]() {
+        random_state ^= random_state << 13U;
+        random_state ^= random_state >> 17U;
+        random_state ^= random_state << 5U;
+        return random_state;
+    };
+
+    std::vector<Card> deck;
+    std::uint64_t id = 1;
+    for (const Suit suit : suits) {
+        for (const int rank : ranks) {
+            deck.push_back(Card::normal(CardId{id++}, suit, Rank::integer(rank)));
+        }
+    }
+    for (std::size_t index = deck.size() - 1; index > 0; --index) {
+        std::swap(deck[index], deck[next_random() % (index + 1)]);
+    }
+
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 4;
+    for (std::size_t seat = 0; seat < 4; ++seat) {
+        for (std::size_t card = 0; card < 4; ++card) {
+            scenario.hands[seat].push_back(deck[seat * 4 + card]);
+        }
+    }
+    return scenario;
+}
+
+TEST(SearchTest, DeterministicOrderingKeepsCanonicalBestAction)
+{
+    for (int deal_index = 0; deal_index < 4; ++deal_index) {
+        const Scenario scenario = ordered_scenario(deal_index);
+        auto ordered = *Position::create(scenario);
+        auto canonical = *Position::create(scenario);
+
+        const SearchResult fast = solve(
+            ordered, Partnership::NorthSouth, SearchOptions{true, true, nullptr});
+        const SearchResult exhaustive = solve(
+            canonical, Partnership::NorthSouth, SearchOptions{false, false, nullptr});
+
+        EXPECT_EQ(fast.tricks, exhaustive.tricks) << "deal " << deal_index;
+        // Ordering only changes search order; an equal-valued tie must still
+        // resolve to the earliest action in the canonical legal list.
+        EXPECT_EQ(fast.best_action, exhaustive.best_action) << "deal " << deal_index;
+    }
+}
+
 TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
 {
     check_seeded_deals(SearchOptions{true, true, nullptr, false});

@@ -117,6 +117,7 @@ int main(int argc, char** argv)
     double minimum_ms = std::numeric_limits<double>::max();
     double maximum_ms = 0.0;
     SearchStats totals;
+    std::vector<unsigned long long> sample_nodes;
 
     for (int sample = 0; sample < args.samples; ++sample) {
         const Scenario scenario = build_scenario(
@@ -152,6 +153,8 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "sample %d produced no legal actions\n", sample);
             return 1;
         }
+        sample_nodes.push_back(
+            static_cast<unsigned long long>(stats.nodes));
         total_ms += elapsed_ms;
         minimum_ms = std::min(minimum_ms, elapsed_ms);
         maximum_ms = std::max(maximum_ms, elapsed_ms);
@@ -170,7 +173,8 @@ int main(int argc, char** argv)
         "\"average_ms\":%.3f,\"min_ms\":%.3f,\"max_ms\":%.3f,"
         "\"nodes\":%llu,\"table_queries\":%llu,\"table_hits\":%llu,"
         "\"collision_rejections\":%llu,\"cutoffs\":%llu,"
-        "\"pvs_null_windows\":%llu,\"pvs_researches\":%llu}\n",
+        "\"pvs_null_windows\":%llu,\"pvs_researches\":%llu,"
+        "\"samples_nodes\":[",
         args.cards,
         args.samples,
         args.seed,
@@ -185,5 +189,9 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(totals.cutoffs),
         static_cast<unsigned long long>(totals.pvs_null_windows),
         static_cast<unsigned long long>(totals.pvs_researches));
+    for (std::size_t index = 0; index < sample_nodes.size(); ++index) {
+        std::printf("%s%llu", index == 0 ? "" : ",", sample_nodes[index]);
+    }
+    std::printf("]}\n");
     return 0;
 }

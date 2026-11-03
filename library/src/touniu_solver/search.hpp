@@ -22,6 +22,11 @@ struct SearchStats {
     std::uint64_t cutoffs = 0;
     std::uint64_t pvs_null_windows = 0;
     std::uint64_t pvs_researches = 0;
+    std::uint64_t first_move_cutoffs = 0;
+    std::uint64_t ordering_tt = 0;
+    std::uint64_t ordering_mv = 0;
+    std::uint64_t ordering_killer = 0;
+    std::uint64_t ordering_static = 0;
 };
 
 struct SearchOptions {

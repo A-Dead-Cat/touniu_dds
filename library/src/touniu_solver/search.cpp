@@ -4,6 +4,7 @@
 #include <cassert>
 #include <cstddef>
 #include <limits>
+#include <array>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -89,12 +90,15 @@ public:
         : target_(target),
           options_(options),
           table_(table_slots),
-          action_buffers_(buffer_count)
+          action_buffers_(buffer_count),
+          main_variation_(buffer_count),
+          killers_(buffer_count)
     {
     }
 
     auto solve(Position& position) -> SearchResult
     {
+        root_depth_ = search_depth(position);
         const int low = score(position, target_);
         if (position.is_finished()) {
             return {low, std::nullopt};
@@ -113,6 +117,7 @@ public:
         if (position.is_finished()) {
             return results;
         }
+        root_depth_ = search_depth(position);
         ActionList& actions = buffer(position);
         position.legal_actions_into(actions);
         results.reserve(actions.size());
@@ -285,17 +290,13 @@ private:
         int best = maximizing ? low : high;
         std::optional<Action> best_action;
 
+        const std::uint32_t depth = search_depth(position);
         ActionList& actions = buffer(position);
         position.legal_actions_into(actions);
-        if (cached != nullptr && cached->best_action.has_value()) {
-            const auto preferred = std::find(
-                actions.begin(), actions.end(), *cached->best_action);
-            if (preferred != actions.end()) {
-                std::iter_swap(actions.begin(), preferred);
-            }
-        }
+        order_actions(actions, depth, cached);
 
         bool first = true;
+        std::size_t ordered_position = 0;
         for (std::size_t index = 0; index < actions.size(); ++index) {
             const Action action = actions[index];
             position.apply_known_legal(action);
@@ -329,8 +330,13 @@ private:
             }
             position.undo();
 
-            if (!best_action.has_value() ||
-                (maximizing ? value > best : value < best)) {
+            // Null-window probes only prove bounds, so a tie is never used to
+            // replace the current action here. The root keeps the canonical
+            // legal order, where strict improvement already preserves the
+            // earliest action among equal values.
+            const bool improves = !best_action.has_value() ||
+                (maximizing ? value > best : value < best);
+            if (improves) {
                 best = value;
                 best_action = action;
             }
@@ -342,18 +348,102 @@ private:
             if (prune && working_alpha >= working_beta) {
                 if (options_.stats != nullptr) {
                     ++options_.stats->cutoffs;
+                    if (ordered_position == 0U) {
+                        ++options_.stats->first_move_cutoffs;
+                    }
                 }
+                record_cutoff(action, depth);
                 break;
             }
+            ++ordered_position;
         }
 
+        if (best_action.has_value()) {
+            main_variation_[depth] = *best_action;
+        }
         return {{best, classify(best, alpha, beta)}, best_action};
     }
+
+    // Reorders the same legal actions by proven priority only: table best
+    // action, then this ply's main-variation action, then the killers. All
+    // remaining actions keep the canonical legal order. Static rank ordering
+    // and history were measured to increase node counts and are not used.
+    void order_actions(
+        ActionList& actions,
+        const std::uint32_t depth,
+        const TranspositionEntry* cached)
+    {
+        if (depth == root_depth_) {
+            return;
+        }
+        const std::array<std::optional<Action>, 4> priorities = {
+            cached != nullptr ? cached->best_action : std::nullopt,
+            main_variation_[depth],
+            killers_[depth][0],
+            killers_[depth][1],
+        };
+        std::size_t target = 0;
+        std::size_t source = 0;
+        for (const std::optional<Action>& priority : priorities) {
+            if (!priority.has_value() || target >= actions.size()) {
+                continue;
+            }
+            const auto found = std::find(
+                actions.begin() + static_cast<std::ptrdiff_t>(target),
+                actions.end(),
+                *priority);
+            if (found == actions.end()) {
+                continue;
+            }
+            std::rotate(
+                actions.begin() + static_cast<std::ptrdiff_t>(target),
+                found,
+                found + 1);
+            if (target == 0U) {
+                source = &priority - &priorities[0] + 1U;
+            }
+            ++target;
+        }
+
+        if (options_.stats != nullptr) {
+            switch (source) {
+                case 1:
+                    ++options_.stats->ordering_tt;
+                    break;
+                case 2:
+                    ++options_.stats->ordering_mv;
+                    break;
+                case 3:
+                case 4:
+                    ++options_.stats->ordering_killer;
+                    break;
+                default:
+                    ++options_.stats->ordering_static;
+                    break;
+            }
+        }
+    }
+
+    void record_cutoff(const Action& action, const std::uint32_t depth)
+    {
+        std::array<std::optional<Action>, 2>& killers = killers_[depth];
+        if (action.is_pass()) {
+            return;
+        }
+        if (!killers[0].has_value() || !(*killers[0] == action)) {
+            killers[1] = killers[0];
+            killers[0] = action;
+        }
+    }
+
+    std::uint32_t root_depth_ = 0;
 
     Partnership target_;
     SearchOptions options_;
     TranspositionTable table_;
     std::vector<ActionList> action_buffers_;
+    std::vector<std::optional<Action>> main_variation_;
+    std::vector<std::array<std::optional<Action>, 2>> killers_;
 };
 
 }  // namespace
