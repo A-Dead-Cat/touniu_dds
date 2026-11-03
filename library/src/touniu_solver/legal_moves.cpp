@@ -60,6 +60,16 @@ auto is_real_card_of_suit(const State& state, const Card& card, const Suit suit)
            card.intrinsic_suits().end();
 }
 
+auto is_trump_card(const State& state, const Card& card) -> bool
+{
+    if (is_joker(card)) {
+        return true;
+    }
+    const Suit trump = joker_trump_suit(state.contract());
+    return std::find(card.intrinsic_suits().begin(), card.intrinsic_suits().end(), trump) !=
+           card.intrinsic_suits().end();
+}
+
 }  // namespace
 
 Action::Action(
@@ -211,7 +221,8 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         actions.push_back(Action::play(
             id,
             has_led_suit ? PlayMode::Follow
-                         : (is_joker(*card) ? PlayMode::Trump : PlayMode::Discard),
+                         : (is_trump_card(state, *card)
+                                ? PlayMode::Trump : PlayMode::Discard),
             effective_suit
         ));
     }
