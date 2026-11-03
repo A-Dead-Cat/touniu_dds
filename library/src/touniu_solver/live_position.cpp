@@ -45,8 +45,11 @@ auto has_valid_catalog_ownership(const LivePosition& live) -> bool
         }
     }
 
+    // Cards played in earlier tricks are no longer owned by a hand or the
+    // current trick, but they remain part of the table history: later +2
+    // generation must keep skipping their rank/suit templates.
     for (const auto& entry : ownership) {
-        if (entry.second != 1U) {
+        if (entry.second > 1U) {
             return false;
         }
     }

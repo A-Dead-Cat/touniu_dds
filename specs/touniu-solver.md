@@ -144,6 +144,10 @@ choice when a card can legally be played.
   strain with a single shared table, resetting ordering heuristics between
   declarers. The per-action analysis API keeps its existing shape and converts
   every returned value to the requested target partnership.
+- An imported position may carry catalog cards that no hand or current-trick
+  play owns. They are cards played in earlier tricks and must stay in the
+  catalog so later `+2` draws keep skipping their rank/suit templates; only
+  duplicate IDs and duplicate ownership are rejected.
 - The position identity used by the table is maintained incrementally from
   applied and undone actions and includes each seat's own win count. Positions
   that differ only in which partner won an earlier trick are therefore not

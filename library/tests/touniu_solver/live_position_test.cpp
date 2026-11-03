@@ -130,12 +130,62 @@ TEST(LivePositionTest, RejectsPlayedCardMissingFromCatalog)
     EXPECT_FALSE(Position::create(live).has_value());
 }
 
-TEST(LivePositionTest, RejectsUnusedCatalogCard)
+TEST(LivePositionTest, AcceptsRetiredCatalogCard)
 {
     LivePosition live = valid_partial_position();
     live.cards.push_back(normal_card(5, Suit::Diamonds, 10));
 
-    EXPECT_FALSE(Position::create(live).has_value());
+    // Played in an earlier trick: no hand owns it, but it stays in the table
+    // history for later +2 template deduplication.
+    auto position = Position::create(live);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_NE(position->card(CardId{5}), nullptr);
+    EXPECT_EQ(position->card_catalog().size(), 5U);
+}
+
+TEST(LivePositionTest, RetiredFloatingCardKeepsGenerationDeduplication)
+{
+    Scenario generator_scenario;
+    generator_scenario.seed = 0;
+    auto generator = *State::create(generator_scenario);
+    const Card retired = generator.draw_floating(Seat::North);
+
+    LivePosition with_history;
+    with_history.cards = {
+        Card::plus_two(CardId{1}, Suit::Spades),
+        retired,
+    };
+    with_history.hands[static_cast<std::size_t>(Seat::West)] = {CardId{1}};
+    with_history.next_player = Seat::West;
+    with_history.contract = Contract::NoTrump;
+    with_history.tricks_remaining = 1;
+    with_history.seed = 0;
+    with_history.draw_index = 0;
+
+    LivePosition without_history = with_history;
+    without_history.cards = {Card::plus_two(CardId{1}, Suit::Spades)};
+
+    auto with_retired = Position::create(with_history);
+    auto without_retired = Position::create(without_history);
+    ASSERT_TRUE(with_retired.has_value());
+    ASSERT_TRUE(without_retired.has_value());
+    ASSERT_NE(with_retired->card(retired.id()), nullptr);
+    ASSERT_EQ(without_retired->card(retired.id()), nullptr);
+
+    ASSERT_FALSE(with_retired->legal_actions().empty());
+    ASSERT_FALSE(without_retired->legal_actions().empty());
+    ASSERT_TRUE(with_retired->apply(with_retired->legal_actions().front()));
+    ASSERT_TRUE(without_retired->apply(without_retired->legal_actions().front()));
+
+    // The first generator candidate reuses the retired entity/template, so a
+    // table that remembers it draws a different card.
+    const std::vector<CardId>& plain_draw = without_retired->hand(Seat::North);
+    ASSERT_EQ(plain_draw.size(), 2U);
+    EXPECT_EQ(plain_draw.front(), retired.id());
+
+    const std::vector<CardId>& history_draw = with_retired->hand(Seat::North);
+    ASSERT_EQ(history_draw.size(), 2U);
+    EXPECT_NE(history_draw.front(), retired.id());
 }
 
 TEST(LivePositionTest, RejectsDuplicateCatalogId)

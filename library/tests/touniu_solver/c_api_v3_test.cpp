@@ -171,7 +171,9 @@ TEST(TouniuContractBatchV3Test, RejectsIncompatibleBatches)
     EXPECT_EQ(run(order), TOUNIU_SOLVER_INVALID_REQUEST);
 
     BatchFixture hands = contract_batch();
-    hands.hand_counts = {2, 2, 2, 1};
+    // A different but internally valid deal: one card moves from North to West.
+    std::array<std::uint32_t, 4> other_counts{3, 1, 2, 2};
+    hands.requests[2].hand_counts = other_counts.data();
     EXPECT_EQ(run(hands), TOUNIU_SOLVER_INVALID_REQUEST);
 
     BatchFixture seed = contract_batch();
