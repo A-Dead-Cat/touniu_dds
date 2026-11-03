@@ -9,6 +9,8 @@
 namespace touniu_solver {
 namespace {
 
+constexpr std::uint64_t GeneratedCardIdBase = 0x8000000000000000ULL;
+
 auto seat_index(const Seat seat) -> std::size_t
 {
     return static_cast<std::size_t>(seat);
@@ -18,6 +20,60 @@ auto is_effect_card(const CardKind kind) -> bool
 {
     return kind == CardKind::Block || kind == CardKind::Reverse ||
            kind == CardKind::PlusTwo;
+}
+
+auto generated_during_current_trick(
+    const CardId id,
+    const LivePosition& live) -> bool
+{
+    const std::uint64_t generation_index = id.value - GeneratedCardIdBase;
+    return generation_index >= live.trick_start_draw_index &&
+           generation_index < live.draw_index;
+}
+
+auto cards_match(const Card& left, const Card& right) -> bool
+{
+    return left.id() == right.id() && left.kind() == right.kind() &&
+           left.rank() == right.rank() &&
+           left.intrinsic_suits() == right.intrinsic_suits();
+}
+
+auto matches_live_position(const Position& position, const LivePosition& live) -> bool
+{
+    if (position.next_player() != live.next_player ||
+        position.direction() != live.direction ||
+        position.contract() != live.contract ||
+        position.tricks_remaining() != live.tricks_remaining ||
+        position.seed() != live.seed || position.draw_index() != live.draw_index ||
+        position.pending_block() != live.pending_block ||
+        position.valid_reverse_count() != live.valid_reverse_count ||
+        position.current_trick().size() != live.current_trick.size()) {
+        return false;
+    }
+    for (std::size_t seat = 0; seat < live.hands.size(); ++seat) {
+        const Seat seat_value = static_cast<Seat>(seat);
+        if (position.hand(seat_value) != live.hands[seat] ||
+            position.tricks_won(seat_value) != live.tricks_won[seat]) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < live.current_trick.size(); ++index) {
+        const LiveTrickPlay& expected = live.current_trick[index];
+        const TrickPlay& actual = position.current_trick()[index];
+        const Action expected_action = expected.is_pass
+            ? Action::pass()
+            : Action::play(expected.card_id, *expected.mode, *expected.effective_suit);
+        if (actual.seat != expected.seat || actual.action != expected_action) {
+            return false;
+        }
+    }
+    for (const Card& expected : live.cards) {
+        const Card* actual = position.card(expected.id());
+        if (actual == nullptr || !cards_match(*actual, expected)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace
@@ -37,37 +93,56 @@ auto Position::create(const Scenario& scenario) -> std::optional<Position>
 
 auto Position::create(const LivePosition& live) -> std::optional<Position>
 {
-    if (!validate_live_position(live)) {
+    if (!detail::has_valid_live_position_encoding(live)) {
         return std::nullopt;
     }
 
-    auto state = State::restore(
-        live.hands,
-        live.cards,
-        live.next_player,
+    std::array<std::vector<CardId>, 4> replay_hands;
+    for (std::size_t seat = 0; seat < live.hands.size(); ++seat) {
+        for (const CardId id : live.hands[seat]) {
+            if (!generated_during_current_trick(id, live)) {
+                replay_hands[seat].push_back(id);
+            }
+        }
+    }
+    for (const LiveTrickPlay& play : live.current_trick) {
+        if (!play.is_pass && !generated_during_current_trick(play.card_id, live)) {
+            replay_hands[seat_index(play.seat)].push_back(play.card_id);
+        }
+    }
+    std::vector<Card> replay_cards;
+    for (const Card& card : live.cards) {
+        if (!generated_during_current_trick(card.id(), live)) {
+            replay_cards.push_back(card);
+        }
+    }
+    State replay_state(
+        std::move(replay_hands),
+        std::move(replay_cards),
+        live.current_trick.empty() ? live.next_player : live.current_trick.front().seat,
         live.direction,
         live.contract,
         live.tricks_remaining,
         live.seed,
-        live.draw_index
+        live.trick_start_draw_index
     );
-    if (!state.has_value()) {
+    Position replay(std::move(replay_state));
+    replay.tricks_won_ = live.tricks_won;
+    for (const LiveTrickPlay& play : live.current_trick) {
+        const Action action = play.is_pass
+            ? Action::pass()
+            : Action::play(play.card_id, *play.mode, *play.effective_suit);
+        const std::vector<Action> legal = replay.legal_actions();
+        if (std::find(legal.begin(), legal.end(), action) == legal.end() ||
+            !replay.apply(action)) {
+            return std::nullopt;
+        }
+    }
+    if (!matches_live_position(replay, live)) {
         return std::nullopt;
     }
-
-    Position position(std::move(*state));
-    for (const LiveTrickPlay& play : live.current_trick) {
-        position.current_trick_.push_back({
-            play.seat,
-            play.is_pass
-                ? Action::pass()
-                : Action::play(play.card_id, *play.mode, *play.effective_suit),
-        });
-    }
-    position.pending_block_ = live.pending_block;
-    position.valid_reverse_count_ = live.valid_reverse_count;
-    position.tricks_won_ = live.tricks_won;
-    return position;
+    replay.undo_stack_.clear();
+    return replay;
 }
 
 auto Position::next_player() const -> Seat

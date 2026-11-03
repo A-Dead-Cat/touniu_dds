@@ -58,6 +58,7 @@ cc_test(
         "//library/src/touniu_solver:live_position",
         "//library/src/touniu_solver:position",
         "//library/src/touniu_solver:position_hash",
+        "//library/src/touniu_solver:search",
         "@googletest//:gtest_main",
     ],
 )

@@ -124,8 +124,7 @@ auto has_consistent_trick_state(const LivePosition& live) -> bool
 
         const PlayMode mode = *play.mode;
         const Suit effective_suit = *play.effective_suit;
-        if (!is_valid_mode(mode) || !is_valid_suit(effective_suit) ||
-            (index == 0U) != (mode == PlayMode::Lead)) {
+        if (!is_valid_mode(mode) || !is_valid_suit(effective_suit)) {
             return false;
         }
 
@@ -151,10 +150,11 @@ auto has_consistent_trick_state(const LivePosition& live) -> bool
 
 }  // namespace
 
-auto validate_live_position(const LivePosition& live) -> bool
+auto detail::has_valid_live_position_encoding(const LivePosition& live) -> bool
 {
     return has_valid_position_enums(live) && has_valid_catalog_ownership(live) &&
-           has_consistent_trick_state(live);
+           has_consistent_trick_state(live) &&
+           live.trick_start_draw_index <= live.draw_index;
 }
 
 }  // namespace touniu_solver

@@ -23,16 +23,6 @@ struct Scenario {
 class State {
 public:
     static auto create(const Scenario& scenario) -> std::optional<State>;
-    static auto restore(
-        std::array<std::vector<CardId>, 4> hands,
-        std::vector<Card> cards,
-        Seat next_player,
-        Direction direction,
-        Contract contract,
-        std::uint32_t tricks_remaining,
-        std::uint32_t seed,
-        std::uint64_t draw_index
-    ) -> std::optional<State>;
 
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
@@ -52,6 +42,10 @@ public:
     void set_direction(Direction direction);
 
 private:
+    friend class Position;
+
+    static constexpr std::uint64_t GeneratedCardIdBase = 0x8000000000000000ULL;
+
     State(
         std::array<std::vector<CardId>, 4> hands,
         std::vector<Card> cards,

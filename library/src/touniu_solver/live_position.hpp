@@ -29,9 +29,14 @@ struct LivePosition {
     std::optional<Seat> pending_block;
     std::uint32_t valid_reverse_count = 0;
     std::uint32_t seed = DefaultGenerationSeed;
+    std::uint64_t trick_start_draw_index = 0;
     std::uint64_t draw_index = 0;
 };
 
-auto validate_live_position(const LivePosition& live) -> bool;
+namespace detail {
+
+auto has_valid_live_position_encoding(const LivePosition& live) -> bool;
+
+}  // namespace detail
 
 }  // namespace touniu_solver

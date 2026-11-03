@@ -79,6 +79,30 @@ auto is_trump_card(const State& state, const Card& card) -> bool
            card.intrinsic_suits().end();
 }
 
+auto lead_actions(const State& state, const std::vector<CardId>& hand)
+    -> std::vector<Action>
+{
+    std::vector<Action> actions;
+    const bool ordinary_card_remains = has_ordinary_card(state, hand);
+    for (const CardId id : hand) {
+        const Card* card = state.card(id);
+        assert(card != nullptr);
+        if (ordinary_card_remains && is_multi_suit_card(*card)) {
+            continue;
+        }
+        if (card->kind() == CardKind::ThreeSuitCat) {
+            actions.push_back(Action::play(id, PlayMode::Lead, Suit::NoTrump));
+        } else if (is_joker(*card)) {
+            actions.push_back(Action::play(
+                id, PlayMode::Lead, joker_trump_suit(state.contract())));
+        } else {
+            actions.push_back(Action::play(
+                id, PlayMode::Lead, card->intrinsic_suits().front()));
+        }
+    }
+    return actions;
+}
+
 }  // namespace
 
 Action::Action(
@@ -129,37 +153,19 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
         return {Action::pass()};
     }
 
-    std::vector<Action> actions;
-    if (trick.empty()) {
-        const bool ordinary_card_remains = has_ordinary_card(state, hand);
-        for (const CardId id : hand) {
-            const Card* card = state.card(id);
-            assert(card != nullptr);
-            if (ordinary_card_remains && is_multi_suit_card(*card)) {
-                continue;
-            }
-            if (card->kind() == CardKind::ThreeSuitCat) {
-                actions.push_back(Action::play(id, PlayMode::Lead, Suit::NoTrump));
-                continue;
-            }
-            if (is_joker(*card)) {
-                actions.push_back(Action::play(
-                    id, PlayMode::Lead, joker_trump_suit(state.contract())));
-                continue;
-            }
-            actions.push_back(Action::play(
-                id,
-                PlayMode::Lead,
-                card->intrinsic_suits().front()
-            ));
-        }
-        return actions;
+    const auto lead_play = std::find_if(
+        trick.begin(),
+        trick.end(),
+        [](const TrickPlay& play) { return !play.action.is_pass(); }
+    );
+    if (lead_play == trick.end()) {
+        return lead_actions(state, hand);
     }
 
-    const std::optional<Suit> led_suit = trick.front().action.effective_suit();
+    std::vector<Action> actions;
+    const std::optional<Suit> led_suit = lead_play->action.effective_suit();
     assert(led_suit.has_value());
-    const Card* lead_card = trick.front().action.is_pass()
-        ? nullptr : state.card(*trick.front().action.card_id());
+    const Card* lead_card = state.card(*lead_play->action.card_id());
     const bool has_led_suit = std::any_of(hand.begin(), hand.end(), [&](const CardId id) {
         const Card* card = state.card(id);
         assert(card != nullptr);

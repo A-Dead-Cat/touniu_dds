@@ -7,7 +7,6 @@
 namespace touniu_solver {
 namespace {
 
-constexpr std::uint64_t GeneratedCardIdBase = 0x8000000000000000ULL;
 constexpr std::uint64_t SplitMixIncrement = 0x9E3779B97F4A7C15ULL;
 constexpr std::uint64_t SplitMixMultiplierOne = 0xBF58476D1CE4E5B9ULL;
 constexpr std::uint64_t SplitMixMultiplierTwo = 0x94D049BB133111EBULL;
@@ -83,28 +82,6 @@ auto State::create(const Scenario& scenario) -> std::optional<State>
         scenario.tricks_remaining,
         scenario.seed.value_or(DefaultGenerationSeed),
         0
-    );
-}
-
-auto State::restore(
-    std::array<std::vector<CardId>, 4> hands,
-    std::vector<Card> cards,
-    const Seat next_player,
-    const Direction direction,
-    const Contract contract,
-    const std::uint32_t tricks_remaining,
-    const std::uint32_t seed,
-    const std::uint64_t draw_index) -> std::optional<State>
-{
-    return State(
-        std::move(hands),
-        std::move(cards),
-        next_player,
-        direction,
-        contract,
-        tricks_remaining,
-        seed,
-        draw_index
     );
 }
 

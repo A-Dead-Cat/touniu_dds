@@ -1,5 +1,6 @@
 #include "trick_resolution.hpp"
 
+#include <algorithm>
 #include <cassert>
 
 namespace touniu_solver {
@@ -34,10 +35,13 @@ auto eligible(const State& state, const Trick& trick, const TrickPlay& play) -> 
     }
     const Card* card = state.card(*play.action.card_id());
     assert(card != nullptr);
-    if (trick.front().action.is_pass()) {
-        return is_trump(state, *card, play.action) ? 3 : 1;
-    }
-    const Card* lead = state.card(*trick.front().action.card_id());
+    const auto lead_play = std::find_if(
+        trick.begin(),
+        trick.end(),
+        [](const TrickPlay& candidate) { return !candidate.action.is_pass(); }
+    );
+    assert(lead_play != trick.end());
+    const Card* lead = state.card(*lead_play->action.card_id());
     assert(lead != nullptr);
     if (lead->kind() == CardKind::FourSuit || lead->intrinsic_suits().size() == 4U) {
         return 1;
@@ -48,7 +52,7 @@ auto eligible(const State& state, const Trick& trick, const TrickPlay& play) -> 
     if (lead->kind() == CardKind::ThreeSuitCat) {
         return 1;
     }
-    return play.action.effective_suit() == trick.front().action.effective_suit() ? 2 : 0;
+    return play.action.effective_suit() == lead_play->action.effective_suit() ? 2 : 0;
 }
 
 auto effective_rank(const State& state, const Card& card) -> std::int32_t
