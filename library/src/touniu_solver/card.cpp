@@ -104,6 +104,11 @@ auto Card::plus_two(const CardId id, const Suit suit) -> Card
     return Card(id, CardKind::PlusTwo, Rank::integer(15), {suit});
 }
 
+auto Card::no_trump(const CardId id, const Rank rank) -> Card
+{
+    return Card(id, CardKind::NoTrump, rank, {Suit::NoTrump});
+}
+
 auto Card::block(const CardId id, const Suit suit) -> Card
 {
     assert(is_normal_suit(suit));

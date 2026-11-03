@@ -40,6 +40,26 @@ auto trump_suit(const Contract contract) -> std::optional<Suit>
     return std::nullopt;
 }
 
+auto is_joker(const Card& card) -> bool
+{
+    return card.kind() == CardKind::BigJoker || card.kind() == CardKind::SmallJoker;
+}
+
+auto joker_trump_suit(const Contract contract) -> Suit
+{
+    const auto suit = trump_suit(contract);
+    return suit.value_or(Suit::NoTrump);
+}
+
+auto is_real_card_of_suit(const State& state, const Card& card, const Suit suit) -> bool
+{
+    if (is_joker(card)) {
+        return suit == joker_trump_suit(state.contract());
+    }
+    return std::find(card.intrinsic_suits().begin(), card.intrinsic_suits().end(), suit) !=
+           card.intrinsic_suits().end();
+}
+
 }  // namespace
 
 Action::Action(
@@ -105,6 +125,11 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
                 actions.push_back(Action::play(id, PlayMode::Lead, Suit::NoTrump));
                 continue;
             }
+            if (is_joker(*card)) {
+                actions.push_back(Action::play(
+                    id, PlayMode::Lead, joker_trump_suit(state.contract())));
+                continue;
+            }
             actions.push_back(Action::play(
                 id,
                 PlayMode::Lead,
@@ -121,11 +146,7 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
     const bool has_led_suit = std::any_of(hand.begin(), hand.end(), [&](const CardId id) {
         const Card* card = state.card(id);
         assert(card != nullptr);
-        return !is_multi_suit_card(*card) && std::find(
-                   card->intrinsic_suits().begin(),
-                   card->intrinsic_suits().end(),
-                   *led_suit
-               ) != card->intrinsic_suits().end();
+        return !is_multi_suit_card(*card) && is_real_card_of_suit(state, *card, *led_suit);
     });
 
     if (state.contract() == Contract::NoTrump && *led_suit != Suit::NoTrump &&
@@ -178,18 +199,19 @@ auto legal_actions(const State& state, const Trick& trick) -> std::vector<Action
             }
             continue;
         }
-        const bool matches_lead = std::find(
-                                      card->intrinsic_suits().begin(),
-                                      card->intrinsic_suits().end(),
-                                      *led_suit
-                                  ) != card->intrinsic_suits().end();
+        const bool matches_lead = is_real_card_of_suit(state, *card, *led_suit);
         if (has_led_suit && !matches_lead) {
             continue;
         }
-        const Suit effective_suit = has_led_suit ? *led_suit : card->intrinsic_suits().front();
+        const Suit effective_suit = has_led_suit
+            ? *led_suit
+            : (is_joker(*card)
+                   ? joker_trump_suit(state.contract())
+                   : card->intrinsic_suits().front());
         actions.push_back(Action::play(
             id,
-            has_led_suit ? PlayMode::Follow : PlayMode::Discard,
+            has_led_suit ? PlayMode::Follow
+                         : (is_joker(*card) ? PlayMode::Trump : PlayMode::Discard),
             effective_suit
         ));
     }

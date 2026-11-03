@@ -51,5 +51,14 @@ TEST(CardTest, RepresentsMultiSuitAndSpecialCards)
     EXPECT_EQ(plus_two.rank().millionths(), 15'000'000);
 }
 
+TEST(CardTest, RepresentsNoTrumpAsTheFifthIntrinsicSuit)
+{
+    const Card no_trump = Card::no_trump(CardId{47}, Rank::integer(9));
+
+    EXPECT_EQ(no_trump.kind(), CardKind::NoTrump);
+    EXPECT_EQ(no_trump.intrinsic_suits(), std::vector<Suit>{Suit::NoTrump});
+    EXPECT_EQ(no_trump.rank().millionths(), 9'000'000);
+}
+
 }  // namespace
 }  // namespace touniu_solver
