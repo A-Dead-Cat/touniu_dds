@@ -5,7 +5,7 @@
  *
  * Usage:
  *   node touniu_contract_benchmark.mjs EMSCRIPTEN_JS WASM_FILE [--cards n]
- *       [--seed s] [--seeds count] [--repeats k]
+ *       [--seed s] [--seeds count] [--repeats k] [--batch-only]
  *
  * Each deal builds the 20 Playground contract cells (four declarers times five
  * strains). A warm-up run of both paths precedes the timed repeats.
@@ -71,7 +71,7 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  const args = { cards: 7, seed: 591601503, seeds: 5, repeats: 5 };
+  const args = { cards: 7, seed: 591601503, seeds: 5, repeats: 5, batchOnly: false };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
     const value = Number(argv[index + 1]);
@@ -87,6 +87,8 @@ function parseArgs(argv) {
     } else if (flag === "--repeats" && Number.isFinite(value)) {
       args.repeats = Math.max(Math.trunc(value), 1);
       index += 1;
+    } else if (flag === "--batch-only") {
+      args.batchOnly = true;
     }
   }
   return args;
@@ -279,7 +281,7 @@ async function main() {
   {
     const seed = args.seed >>> 0;
     const cardCount = writeDeal(args.cards, seed);
-    runV2(cardCount, seed);
+    if (!args.batchOnly) runV2(cardCount, seed);
     runV3(cardCount, seed);
   }
 
@@ -287,20 +289,24 @@ async function main() {
   for (let sample = 0; sample < args.seeds; sample += 1) {
     const seed = (args.seed + sample) >>> 0;
     const cardCount = writeDeal(args.cards, seed);
-    const reference = runV2(cardCount, seed);
+    const reference = args.batchOnly ? null : runV2(cardCount, seed);
     const timesV2 = [];
     const timesV3 = [];
     let mismatches = 0;
     for (let repeat = 0; repeat < args.repeats; repeat += 1) {
       let started = process.hrtime.bigint();
-      runV2(cardCount, seed);
-      timesV2.push(Number(process.hrtime.bigint() - started) / 1e6);
+      if (!args.batchOnly) {
+        runV2(cardCount, seed);
+        timesV2.push(Number(process.hrtime.bigint() - started) / 1e6);
+      }
 
       started = process.hrtime.bigint();
       const batch = runV3(cardCount, seed);
       timesV3.push(Number(process.hrtime.bigint() - started) / 1e6);
-      for (let index = 0; index < 20; index += 1) {
-        if (batch[index] !== reference[index]) mismatches += 1;
+      if (reference) {
+        for (let index = 0; index < 20; index += 1) {
+          if (batch[index] !== reference[index]) mismatches += 1;
+        }
       }
     }
     const mean = values => values.reduce((sum, value) => sum + value, 0) / values.length;
