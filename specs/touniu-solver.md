@@ -235,7 +235,12 @@ choice when a card can legally be played.
   `2^20` (32 MiB) when device memory is unknown or below 2 GiB. The tier only
   changes capacity, never cached values; ABI v3 keeps the standard default and
   `touniu_solver_set_contract_table_tier_v1` selects a tier per module
-  instance. Per-action analysis keeps its own cards-based ceiling.
+  instance. Per-action analysis keeps its own cards-based ceiling, sized from
+  measurements rather than "as large as possible": past a point the extra
+  capacity only adds cache and TLB misses. It uses `2^15` slots up to five
+  cards per hand, `2^17` at six, `2^20` at seven, `2^23` at eight and nine,
+  `2^22` at ten (the node count there is small enough that a bigger table only
+  costs misses), `2^24` at eleven and twelve, and `2^25` at thirteen.
 - The C ABI currently accepts positions at a trick boundary. Importing an
   already-partially-played trick will be added before TouniuBridge uses the
   solver for mid-trick advice.

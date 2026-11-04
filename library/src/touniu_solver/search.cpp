@@ -100,6 +100,12 @@ auto analysis_transposition_slots(const Position& position) -> std::size_t
         return 1U << 23U;
     }
     if (per_seat == 9U) {
+        return 1U << 23U;
+    }
+    if (per_seat == 10U) {
+        return 1U << 22U;
+    }
+    if (per_seat <= 12U) {
         return 1U << 24U;
     }
     return 1U << 25U;
