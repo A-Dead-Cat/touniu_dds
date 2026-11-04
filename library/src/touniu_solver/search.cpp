@@ -687,64 +687,82 @@ private:
         return {{best, classify(best, alpha, beta)}, best_action};
     }
 
-    // Static ordering score: take the trick if the card can, cheapest winner
-    // first, otherwise throw the lowest card; when leading, try the highest
-    // card first. Only the order changes, never the action set or the value,
-    // and equal scores keep the canonical order through a stable sort.
-    auto static_score(const Position& position, const Action& action) const -> int
+    // Best play so far in the trick, computed once per node instead of once
+    // per candidate action.
+    struct TrickBest {
+        std::size_t led = 4U;
+        int card_class = -1;
+        int rank = -1;
+        bool valid = false;
+    };
+
+    auto trick_best(const Position& position) const -> TrickBest
     {
-        if (action.is_pass()) {
-            return -1000000;
-        }
-        const Card* card = position.card(*action.card_id());
-        if (card == nullptr) {
-            return 0;
-        }
-        const int rank_thousandths = card->rank().millionths() / 1000;
+        TrickBest best;
         const Trick& trick = position.current_trick();
         if (trick.empty()) {
-            return rank_thousandths;
+            return best;
         }
         const bool no_trump = position.contract() == Contract::NoTrump;
         const std::size_t trump =
             static_cast<std::size_t>(static_cast<int>(position.contract()));
-        std::size_t led = 4U;
-        int best_class = -1;
-        int best_rank = -1;
         for (const TrickPlay& play : trick) {
-            if (play.action.is_pass()) {
-                continue;
-            }
-            const Card* played = position.card(*play.action.card_id());
-            if (played == nullptr) {
-                continue;
-            }
-            if (!play.action.effective_suit().has_value()) {
+            if (play.action.is_pass() || !play.action.effective_suit().has_value()) {
                 continue;
             }
             const std::size_t suit =
                 static_cast<std::size_t>(*play.action.effective_suit());
-            if (led == 4U) {
-                led = suit;
+            if (best.led == 4U) {
+                best.led = suit;
             }
             const int card_class = (!no_trump && suit == trump)
-                ? 3 : (suit == led ? 2 : 0);
-            const int card_rank = played->rank().millionths();
-            if (card_class > best_class ||
-                (card_class == best_class && card_rank > best_rank)) {
-                best_class = card_class;
-                best_rank = card_rank;
+                ? 3 : (suit == best.led ? 2 : 0);
+            const int rank = position.quick_rank(*play.action.card_id());
+            if (rank < 0) {
+                continue;
             }
+            if (card_class > best.card_class ||
+                (card_class == best.card_class && rank > best.rank)) {
+                best.card_class = card_class;
+                best.rank = rank;
+                best.valid = true;
+            }
+        }
+        return best;
+    }
+
+    // Static ordering score: take the trick if the card can, cheapest winner
+    // first, otherwise throw the lowest card; when leading, try the highest
+    // card first. Only the order changes, never the action set or the value,
+    // and equal scores keep the canonical order through a stable sort.
+    auto static_score(
+        const Position& position,
+        const Action& action,
+        const TrickBest& best) const -> int
+    {
+        if (action.is_pass()) {
+            return -1000000;
+        }
+        const int rank = position.quick_rank(*action.card_id());
+        if (rank < 0) {
+            return 0;
+        }
+        const int rank_thousandths = rank / 1000;
+        if (best.led == 4U) {
+            return rank_thousandths;
         }
         if (!action.effective_suit().has_value()) {
             return 0;
         }
+        const bool no_trump = position.contract() == Contract::NoTrump;
+        const std::size_t trump =
+            static_cast<std::size_t>(static_cast<int>(position.contract()));
         const std::size_t suit =
             static_cast<std::size_t>(*action.effective_suit());
         const int card_class = (!no_trump && suit == trump)
-            ? 3 : (suit == led ? 2 : 0);
-        const bool wins = card_class > best_class ||
-            (card_class == best_class && rank_thousandths * 1000 > best_rank);
+            ? 3 : (suit == best.led ? 2 : 0);
+        const bool wins = card_class > best.card_class ||
+            (card_class == best.card_class && rank > best.rank);
         if (wins) {
             return 1000000 - rank_thousandths;
         }
@@ -816,8 +834,9 @@ private:
             // Score once, then a stable insertion sort so equal scores keep the
             // canonical order.
             std::array<int, ActionList::InlineCapacity> scores{};
+            const TrickBest best = trick_best(position);
             for (std::size_t index = target; index < actions.size(); ++index) {
-                scores[index] = static_score(position, actions[index]);
+                scores[index] = static_score(position, actions[index], best);
             }
             for (std::size_t index = target + 1U; index < actions.size(); ++index) {
                 const Action action = actions[index];

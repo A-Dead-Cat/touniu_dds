@@ -41,6 +41,9 @@ public:
     [[nodiscard]] auto current_trick() const -> const Trick&;
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
     [[nodiscard]] auto hand_size(Seat seat) const -> std::uint32_t;
+    // Rank lookup for the ordering heuristic: one open-addressed probe on the
+    // compact path instead of a catalog search.
+    [[nodiscard]] auto quick_rank(CardId id) const -> std::int32_t;
     [[nodiscard]] auto uses_compact_operations() const -> bool;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
     [[nodiscard]] auto card_catalog() const -> const std::vector<Card>&;

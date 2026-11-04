@@ -654,6 +654,20 @@ void Position::prune_reached_predictions()
     }
 }
 
+auto Position::quick_rank(const CardId id) const -> std::int32_t
+{
+    if (fast_active_) {
+        const std::uint32_t slot = fast_slot(id);
+        if (slot != 0xFFFFFFFFU) {
+            return fast_rank(
+                static_cast<std::uint8_t>(slot >> 8U),
+                static_cast<std::uint8_t>(slot & 0xFFU));
+        }
+    }
+    const Card* card = state_.card(id);
+    return card == nullptr ? -1 : card->rank().millionths();
+}
+
 auto Position::uses_compact_operations() const -> bool
 {
     return fast_active_;
@@ -1218,10 +1232,10 @@ auto Position::table_identity() const -> PositionIdentity
     // positions reached by playing interchangeable cards share an entry.
     std::uint64_t primary = 0x9E3779B97F4A7C15ULL;
     std::uint64_t verifier = 0xC2B2AE3D27D4EB4FULL;
-    const auto mix = [](std::uint64_t& target, std::uint64_t value) {
-        target ^= value + 0x9E3779B97F4A7C15ULL + (target << 6U) + (target >> 2U);
-        target *= 0xFF51AFD7ED558CCDULL;
-        target ^= target >> 33U;
+    const auto mix = [](std::uint64_t& left, std::uint64_t& right,
+                        const std::uint64_t value) {
+        left = (left ^ value) * 0x9E3779B97F4A7C15ULL;
+        right = (right + value) * 0xBF58476D1CE4E5B9ULL;
     };
     for (std::size_t bucket = 0; bucket < 5; ++bucket) {
         std::uint64_t live = live_mask_[bucket];
@@ -1233,12 +1247,11 @@ auto Position::table_identity() const -> PositionIdentity
                 (static_cast<std::uint64_t>(bucket) << 32U) |
                 (static_cast<std::uint64_t>(dense) << 8U) |
                 owner_of_[bucket][static_cast<std::size_t>(bit)];
-            mix(primary, token);
-            mix(verifier, token ^ 0xA5A5A5A5A5A5A5A5ULL);
+            mix(primary, verifier, token);
             ++dense;
         }
     }
-    mix(primary,
+    mix(primary, verifier,
         (static_cast<std::uint64_t>(state_.next_player()) << 40U) |
         (static_cast<std::uint64_t>(state_.direction()) << 36U) |
         (static_cast<std::uint64_t>(state_.contract()) << 32U) |
@@ -1252,20 +1265,6 @@ auto Position::table_identity() const -> PositionIdentity
             pending_block_.has_value()
                 ? static_cast<std::uint8_t>(*pending_block_) : 7U) << 4U) |
         (state_.draw_index() & 0x0FU));
-    mix(verifier,
-        (static_cast<std::uint64_t>(state_.next_player()) << 41U) |
-        (static_cast<std::uint64_t>(state_.direction()) << 37U) |
-        (static_cast<std::uint64_t>(state_.contract()) << 33U) |
-        (static_cast<std::uint64_t>(state_.tricks_remaining()) << 25U) |
-        (static_cast<std::uint64_t>(tricks_won_[3]) << 21U) |
-        (static_cast<std::uint64_t>(tricks_won_[2]) << 17U) |
-        (static_cast<std::uint64_t>(tricks_won_[1]) << 13U) |
-        (static_cast<std::uint64_t>(tricks_won_[0]) << 9U) |
-        (static_cast<std::uint64_t>(valid_reverse_count_ & 1U) << 8U) |
-        (static_cast<std::uint64_t>(
-            pending_block_.has_value()
-                ? static_cast<std::uint8_t>(*pending_block_) : 7U) << 5U) |
-        (state_.draw_index() & 0x1FU));
     for (const TrickPlay& play : current_trick_) {
         std::uint64_t token =
             (static_cast<std::uint64_t>(play.seat) << 56U) |
@@ -1292,8 +1291,7 @@ auto Position::table_identity() const -> PositionIdentity
                     static_cast<std::uint8_t>(
                         *play.action.effective_suit())) << 24U);
         }
-        mix(primary, token);
-        mix(verifier, token ^ 0x5A5A5A5A5A5A5A5AULL);
+        mix(primary, verifier, token);
     }
     return PositionIdentity{primary, verifier};
 }
