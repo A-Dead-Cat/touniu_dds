@@ -4,6 +4,7 @@
 #include <bit>
 #include <cassert>
 #include <iterator>
+#include <cstdio>
 
 #include <touniu_solver/live_position.hpp>
 #include <touniu_solver/trick_resolution.hpp>
@@ -15,6 +16,10 @@ auto seat_index(const Seat seat) -> std::size_t
 {
     return static_cast<std::size_t>(seat);
 }
+
+bool compact_operations_disabled_for_testing = false;
+
+constexpr std::uint32_t kNoUniverseSlot = 0xFFFFFFFFU;
 
 auto is_effect_card(const CardKind kind) -> bool
 {
@@ -79,6 +84,11 @@ auto matches_live_position(const Position& position, const LivePosition& live) -
 }
 
 }  // namespace
+void set_compact_operations_disabled_for_testing(const bool disabled)
+{
+    compact_operations_disabled_for_testing = disabled;
+}
+
 
 Position::Position(State state) : state_(std::move(state))
 {
@@ -131,6 +141,7 @@ auto Position::create(const LivePosition& live) -> std::optional<Position>
         live.trick_start_draw_index
     );
     Position replay(std::move(replay_state));
+    replay.fast_active_ = false;
     replay.tricks_won_ = live.tricks_won;
     for (const LiveTrickPlay& play : live.current_trick) {
         const Action action = play.is_pass
@@ -183,11 +194,16 @@ auto Position::is_finished() const -> bool
 
 auto Position::current_trick() const -> const Trick&
 {
+    materialize_trick();
     return current_trick_;
 }
 
 auto Position::hand(const Seat seat) const -> const std::vector<CardId>&
 {
+    if (fast_active_) {
+        materialize_hands();
+        return hand_cache_[seat_index(seat)];
+    }
     return state_.hand(seat);
 }
 
@@ -223,6 +239,10 @@ auto Position::pending_block() const -> std::optional<Seat>
 
 auto Position::identity() const -> const PositionIdentity&
 {
+    if (fast_active_ && !identity_valid_) {
+        identity_ = identity_tokens::build_identity(identity_input());
+        identity_valid_ = true;
+    }
     return identity_;
 }
 
@@ -237,16 +257,17 @@ auto Position::identity_input() const -> identity_tokens::IdentityInput
     input.draw_index = state_.draw_index();
     input.valid_reverse_count = valid_reverse_count_;
     input.pending_block = pending_block_;
-    input.hands = &state_.hands();
+    input.hands = fast_active_ ? &materialize_hands() : &state_.hands();
     input.tricks_won = &tricks_won_;
     input.catalog = &state_.cards();
-    input.current_trick = &current_trick_;
+    input.current_trick = &current_trick();
     return input;
 }
 
 void Position::refresh_identity()
 {
     identity_ = identity_tokens::build_identity(identity_input());
+    identity_valid_ = true;
 }
 
 auto recompute_position_identity(const Position& position) -> PositionIdentity
@@ -577,6 +598,7 @@ void Position::rebuild_universe()
             update_holdings(static_cast<Seat>(seat), id, true);
         }
     }
+    build_fast_state();
 }
 
 void Position::retire_trick_cards(const Trick& trick)
@@ -632,10 +654,321 @@ void Position::prune_reached_predictions()
     }
 }
 
+auto Position::uses_compact_operations() const -> bool
+{
+    return fast_active_;
+}
+
+auto Position::hand_size(const Seat seat) const -> std::uint32_t
+{
+    return fast_active_
+        ? fast_sizes_[seat_index(seat)]
+        : static_cast<std::uint32_t>(state_.hand(seat).size());
+}
+
+auto Position::fast_slot(const CardId id) const -> std::uint32_t
+{
+    std::size_t slot = (id.value * 0x9E3779B97F4A7C15ULL) >> 56U;
+    while (true) {
+        const std::uint32_t entry = slot_index_[slot];
+        if (entry == 0U) {
+            return kNoUniverseSlot;
+        }
+        const std::uint32_t value = entry - 1U;
+        const std::size_t bucket = value >> 8U;
+        const std::size_t bit = value & 0xFFU;
+        const std::uint64_t candidate = bucket == 4U
+            ? universe_.trump_cards[bit] : universe_.ids[bucket][bit];
+        if (candidate == id.value) {
+            return value;
+        }
+        slot = (slot + 1U) & 0xFFU;
+    }
+}
+
+auto Position::fast_rank(
+    const std::uint8_t bucket,
+    const std::uint8_t bit) const -> std::int32_t
+{
+    return bucket == 4U
+        ? universe_.trump_ranks[bit] : universe_.ranks[bucket][bit].first;
+}
+
+auto Position::materialize_hands() const
+    -> const std::array<std::vector<CardId>, 4>&
+{
+    if (!fast_active_ || hand_cache_valid_) {
+        return hand_cache_;
+    }
+    for (std::size_t seat = 0; seat < 4; ++seat) {
+        hand_cache_[seat].clear();
+        const std::uint32_t count = fast_order_count_[seat];
+        for (std::uint32_t index = 0; index < count; ++index) {
+            const std::uint32_t slot = fast_order_[seat][index];
+            const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
+            const std::uint8_t bit = static_cast<std::uint8_t>(slot & 0xFFU);
+            if (((fast_hands_[seat][bucket] >> bit) & 1U) == 0U) {
+                continue;
+            }
+            hand_cache_[seat].push_back(CardId{bucket == 4U
+                ? universe_.trump_cards[bit] : universe_.ids[bucket][bit]});
+        }
+    }
+    hand_cache_valid_ = true;
+    return hand_cache_;
+}
+
+void Position::materialize_trick() const
+{
+    if (!fast_active_) {
+        return;
+    }
+    current_trick_.assign(
+        fast_trick_.begin(),
+        fast_trick_.begin() + static_cast<std::ptrdiff_t>(fast_trick_size_));
+}
+
+void Position::build_fast_state()
+{
+    fast_active_ = false;
+    fast_hands_ = {};
+    fast_sizes_ = {};
+    fast_trick_ = {};
+    fast_trick_size_ = 0;
+    fast_undo_.clear();
+    slot_index_.fill(0U);
+    hand_cache_valid_ = false;
+    identity_valid_ = true;
+    for (auto& order : fast_order_) {
+        order.fill(0U);
+    }
+    if (!has_shareable_identity() || compact_operations_disabled_for_testing) {
+        return;
+    }
+    for (std::size_t bucket = 0; bucket < 5U; ++bucket) {
+        const std::size_t count = bucket == 4U
+            ? universe_.trump_cards.size() : universe_.ids[bucket].size();
+        for (std::size_t bit = 0; bit < count; ++bit) {
+            const std::uint64_t id = bucket == 4U
+                ? universe_.trump_cards[bit] : universe_.ids[bucket][bit];
+            std::size_t slot = (id * 0x9E3779B97F4A7C15ULL) >> 56U;
+            while (slot_index_[slot] != 0U) {
+                slot = (slot + 1U) & 0xFFU;
+            }
+            slot_index_[slot] =
+                static_cast<std::uint32_t>((bucket << 8U) | bit) + 1U;
+        }
+    }
+    for (std::size_t seat = 0; seat < 4; ++seat) {
+        std::uint32_t order_index = 0;
+        for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+            const std::uint32_t slot = fast_slot(id);
+            if (slot == kNoUniverseSlot ||
+                order_index >= fast_order_[seat].size()) {
+                return;
+            }
+            fast_order_[seat][order_index++] = slot;
+            const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
+            const std::uint8_t bit = static_cast<std::uint8_t>(slot & 0xFFU);
+            fast_hands_[seat][bucket] |= std::uint64_t{1} << bit;
+        }
+        fast_sizes_[seat] = order_index;
+        fast_order_count_[seat] = order_index;
+    }
+    // An imported live position can start mid-trick; the compact trick must
+    // mirror the plays the replay already applied.
+    fast_trick_size_ = static_cast<std::uint32_t>(
+        current_trick_.size() < 4U ? current_trick_.size() : 4U);
+    for (std::uint32_t index = 0; index < fast_trick_size_; ++index) {
+        fast_trick_[index] = current_trick_[index];
+    }
+    fast_active_ = true;
+}
+
+void Position::legal_actions_fast(ActionList& out) const
+{
+    out.clear();
+    if (state_.is_finished()) {
+        return;
+    }
+    const std::size_t index = seat_index(state_.next_player());
+    if (fast_sizes_[index] == 0U) {
+        out.push_back(Action::pass());
+        return;
+    }
+    const auto emit = [&](const std::uint32_t order_slot,
+                          const PlayMode mode, const Suit suit) {
+        const std::uint8_t bucket = static_cast<std::uint8_t>(order_slot >> 8U);
+        const std::uint8_t bit = static_cast<std::uint8_t>(order_slot & 0xFFU);
+        out.push_back(Action::play(
+            CardId{bucket == 4U
+                ? universe_.trump_cards[bit] : universe_.ids[bucket][bit]},
+            mode, suit));
+    };
+    const std::uint32_t count = fast_order_count_[index];
+    if (fast_trick_size_ == 0U) {
+        for (std::uint32_t order = 0; order < count; ++order) {
+            const std::uint32_t slot = fast_order_[index][order];
+            const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
+            const std::uint8_t bit = static_cast<std::uint8_t>(slot & 0xFFU);
+            if (((fast_hands_[index][bucket] >> bit) & 1U) == 0U) {
+                continue;
+            }
+            emit(slot, PlayMode::Lead, static_cast<Suit>(bucket));
+        }
+        return;
+    }
+    std::size_t led_index = 4U;
+    for (std::uint32_t play = 0; play < fast_trick_size_; ++play) {
+        if (!fast_trick_[play].action.is_pass()) {
+            led_index = suit_index(*fast_trick_[play].action.effective_suit());
+            break;
+        }
+    }
+    const bool has_led_suit = led_index < 4U &&
+        fast_hands_[index][led_index] != 0U;
+    const bool no_trump = state_.contract() == Contract::NoTrump;
+    const std::size_t trump_index = no_trump ? 4U
+        : suit_index(static_cast<Suit>(static_cast<int>(state_.contract())));
+    for (std::uint32_t order = 0; order < count; ++order) {
+        const std::uint32_t slot = fast_order_[index][order];
+        const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
+        const std::uint8_t bit = static_cast<std::uint8_t>(slot & 0xFFU);
+        if (((fast_hands_[index][bucket] >> bit) & 1U) == 0U) {
+            continue;
+        }
+        if (has_led_suit) {
+            if (bucket != led_index) {
+                continue;
+            }
+            emit(slot, PlayMode::Follow, static_cast<Suit>(led_index));
+        } else {
+            const bool trump = !no_trump && bucket == trump_index;
+            emit(slot, trump ? PlayMode::Trump : PlayMode::Discard,
+                 static_cast<Suit>(bucket));
+        }
+    }
+}
+
+auto Position::resolve_trick_fast() const -> Seat
+{
+    std::size_t led_index = 4U;
+    for (std::uint32_t play = 0; play < 4U; ++play) {
+        if (!fast_trick_[play].action.is_pass()) {
+            led_index = suit_index(*fast_trick_[play].action.effective_suit());
+            break;
+        }
+    }
+    const bool no_trump = state_.contract() == Contract::NoTrump;
+    const std::size_t trump_index = no_trump ? 4U
+        : suit_index(static_cast<Suit>(static_cast<int>(state_.contract())));
+    Seat winner = fast_trick_[0].seat;
+    int best_class = -1;
+    std::int32_t best_rank = -1;
+    for (std::uint32_t play = 0; play < 4U; ++play) {
+        const TrickPlay& entry = fast_trick_[play];
+        if (entry.action.is_pass()) {
+            continue;
+        }
+        const std::uint32_t slot = fast_slot(*entry.action.card_id());
+        const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
+        const std::uint8_t bit = static_cast<std::uint8_t>(slot & 0xFFU);
+        const int card_class = (!no_trump && bucket == trump_index)
+            ? 3 : (bucket == led_index ? 2 : 0);
+        const std::int32_t rank = fast_rank(bucket, bit);
+        if (card_class > best_class ||
+            (card_class == best_class && rank > best_rank)) {
+            best_class = card_class;
+            best_rank = rank;
+            winner = entry.seat;
+        }
+    }
+    return winner;
+}
+
+void Position::apply_fast(const Action& action)
+{
+    FastUndo record;
+    record.seat = static_cast<std::uint8_t>(seat_index(state_.next_player()));
+    record.previous_next_player = state_.next_player();
+    record.previous_trick_size = fast_trick_size_;
+    record.pass = action.is_pass();
+    if (!record.pass) {
+        const std::uint32_t slot = fast_slot(*action.card_id());
+        record.bucket = static_cast<std::uint8_t>(slot >> 8U);
+        record.bit = static_cast<std::uint8_t>(slot & 0xFFU);
+        const std::uint64_t mask = std::uint64_t{1} << record.bit;
+        fast_hands_[record.seat][record.bucket] &= ~mask;
+        --fast_sizes_[record.seat];
+        holdings_[record.seat][record.bucket] &= ~mask;
+        owner_of_[record.bucket][record.bit] = 0xFFU;
+        hand_cache_valid_ = false;
+    }
+    fast_trick_[fast_trick_size_++] = {state_.next_player(), action};
+    record.completed = fast_trick_size_ == 4U;
+    if (record.completed) {
+        record.previous_trick = fast_trick_;
+        record.previous_live_mask = live_mask_;
+        record.previous_tricks_remaining = state_.tricks_remaining();
+        record.previous_tricks_won = tricks_won_;
+        finish_trick_fast(record);
+    } else {
+        set_next_player(next_seat(state_.next_player()));
+    }
+    identity_valid_ = false;
+    fast_undo_.push_back(std::move(record));
+}
+
+void Position::finish_trick_fast(FastUndo& record)
+{
+    (void) record;
+    const Seat winner = resolve_trick_fast();
+    for (std::uint32_t play = 0; play < 4U; ++play) {
+        const TrickPlay& entry = fast_trick_[play];
+        if (entry.action.is_pass()) {
+            continue;
+        }
+        const std::uint32_t slot = fast_slot(*entry.action.card_id());
+        live_mask_[slot >> 8U] &=
+            ~(std::uint64_t{1} << static_cast<std::uint8_t>(slot & 0xFFU));
+    }
+    ++tricks_won_[seat_index(winner)];
+    if (state_.tricks_remaining() > 0U) {
+        set_tricks_remaining(state_.tricks_remaining() - 1U);
+    }
+    set_next_player(winner);
+    fast_trick_size_ = 0;
+}
+
+void Position::undo_fast()
+{
+    FastUndo record = std::move(fast_undo_.back());
+    fast_undo_.pop_back();
+    if (!record.pass) {
+        const std::uint64_t mask = std::uint64_t{1} << record.bit;
+        fast_hands_[record.seat][record.bucket] |= mask;
+        ++fast_sizes_[record.seat];
+        holdings_[record.seat][record.bucket] |= mask;
+        owner_of_[record.bucket][record.bit] = record.seat;
+        hand_cache_valid_ = false;
+    }
+    if (record.completed) {
+        fast_trick_ = record.previous_trick;
+        live_mask_ = record.previous_live_mask;
+        state_.set_tricks_remaining(record.previous_tricks_remaining);
+        tricks_won_ = record.previous_tricks_won;
+    }
+    fast_trick_size_ = record.previous_trick_size;
+    state_.set_next_player(record.previous_next_player);
+    identity_valid_ = false;
+}
+
 auto Position::leader_sure_tricks() const -> SureTricks
 {
     SureTricks result;
-    if (!current_trick_.empty() || pending_block_.has_value() ||
+    const bool trick_empty = fast_active_ ? fast_trick_size_ == 0U
+                                          : current_trick_.empty();
+    if (!trick_empty || pending_block_.has_value() ||
         !universe_.enabled || universe_.trump_overflow) {
         return result;
     }
@@ -819,8 +1152,7 @@ auto Position::leader_sure_tricks() const -> SureTricks
     // The partner keeps its own tops for later tricks; every other counted
     // trick must be covered by one of its spare cards, because a forced
     // discard could otherwise throw a needed top away.
-    const std::uint32_t partner_cards =
-        static_cast<std::uint32_t>(state_.hand(partner).size());
+    const std::uint32_t partner_cards = hand_size(partner);
     const std::uint32_t partner_other_plays = leader_tops + trump_trick;
     std::uint32_t counted_partner_tops = 0;
     if (partner_cards >= partner_other_plays) {
@@ -829,8 +1161,7 @@ auto Position::leader_sure_tricks() const -> SureTricks
     }
     // The leader plays one card on every counted trick.
     std::uint32_t count = leader_tops + counted_partner_tops + trump_trick;
-    count = std::min(
-        count, static_cast<std::uint32_t>(state_.hand(leader).size()));
+    count = std::min(count, hand_size(leader));
     count = std::min(count, state_.tricks_remaining());
     result.tricks = count;
     return result;
@@ -1001,6 +1332,10 @@ auto Position::legal_actions() const -> ActionList
 
 void Position::legal_actions_into(ActionList& out) const
 {
+    if (fast_active_) {
+        legal_actions_fast(out);
+        return;
+    }
     if (state_.is_finished()) {
         out.clear();
         return;
@@ -1025,6 +1360,10 @@ auto Position::apply(const Action& action) -> bool
 
 void Position::apply_known_legal(const Action& action)
 {
+    if (fast_active_) {
+        apply_fast(action);
+        return;
+    }
     UndoRecord record;
     record.previous_identity = identity_;
     record.previous_live_mask = live_mask_;
@@ -1059,6 +1398,10 @@ void Position::apply_known_legal(const Action& action)
 
 void Position::undo()
 {
+    if (fast_active_) {
+        undo_fast();
+        return;
+    }
     assert(!undo_stack_.empty());
     const UndoRecord& record = undo_stack_.back();
 
@@ -1174,6 +1517,10 @@ void Position::set_next_player(const Seat seat)
     if (previous == seat) {
         return;
     }
+    if (fast_active_) {
+        state_.set_next_player(seat);
+        return;
+    }
     identity_tokens::combine(
         identity_, identity_tokens::DomainNextPlayer,
         static_cast<std::uint64_t>(previous));
@@ -1189,6 +1536,10 @@ void Position::set_direction(const Direction direction)
     if (previous == direction) {
         return;
     }
+    if (fast_active_) {
+        state_.set_direction(direction);
+        return;
+    }
     identity_tokens::combine(
         identity_, identity_tokens::DomainDirection,
         static_cast<std::uint64_t>(previous));
@@ -1202,6 +1553,10 @@ void Position::set_tricks_remaining(const std::uint32_t tricks_remaining)
 {
     const std::uint32_t previous = state_.tricks_remaining();
     if (previous == tricks_remaining) {
+        return;
+    }
+    if (fast_active_) {
+        state_.set_tricks_remaining(tricks_remaining);
         return;
     }
     identity_tokens::combine(

@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <cstdio>
 #include <vector>
 
 #include <touniu_solver/live_position.hpp>
@@ -876,6 +877,111 @@ TEST(PositionTest, SuitContractSureTricksAccountForCatsAndTrumps)
     auto cat = Position::create(build(true));
     ASSERT_TRUE(cat.has_value());
     EXPECT_EQ(cat->leader_sure_tricks().tricks, 0U);
+}
+
+TEST(PositionTest, CompactOperationsMatchTheGeneralPath)
+{
+    // Random plain deals, random legal plays: the compact bitmask path must
+    // reproduce the general CardId path exactly, including identity, hand
+    // order, trick contents and win counts, and must unwind cleanly.
+    for (std::uint32_t seed = 1; seed <= 20; ++seed) {
+        std::vector<Card> deck;
+        std::uint64_t id = 1;
+        for (int suit = 0; suit < 4; ++suit) {
+            for (int rank = 2; rank <= 14; ++rank) {
+                deck.push_back(Card::normal(
+                    CardId{id++}, static_cast<Suit>(suit), Rank::integer(rank)));
+            }
+        }
+        std::uint32_t state = seed * 2654435761U + 11U;
+        for (std::size_t index = deck.size(); index > 1; --index) {
+            state ^= state << 13U;
+            state ^= state >> 17U;
+            state ^= state << 5U;
+            std::swap(deck[index - 1], deck[state % index]);
+        }
+        Scenario scenario;
+        scenario.contract = static_cast<Contract>(seed % 5U);
+        scenario.next_player = static_cast<Seat>(seed % 4U);
+        scenario.tricks_remaining = 4;
+        for (std::size_t slot = 0; slot < 16; ++slot) {
+            scenario.hands[slot % 4].push_back(deck[slot]);
+        }
+
+        auto compact = Position::create(scenario);
+        ASSERT_TRUE(compact->uses_compact_operations()) << "seed " << seed;
+        set_compact_operations_disabled_for_testing(true);
+        auto general = Position::create(scenario);
+        set_compact_operations_disabled_for_testing(false);
+        ASSERT_TRUE(compact.has_value());
+        ASSERT_TRUE(general.has_value());
+
+        int applied = 0;
+        for (int ply = 0; ply < 12; ++ply) {
+            ASSERT_EQ(compact->is_finished(), general->is_finished())
+                << "seed " << seed << " ply " << ply;
+            if (compact->is_finished()) {
+                break;
+            }
+            EXPECT_EQ(compact->next_player(), general->next_player());
+            EXPECT_EQ(compact->tricks_remaining(), general->tricks_remaining());
+            EXPECT_EQ(compact->current_trick().size(),
+                      general->current_trick().size());
+            for (int seat = 0; seat < 4; ++seat) {
+                const std::vector<CardId> compact_hand =
+                    compact->hand(static_cast<Seat>(seat));
+                const std::vector<CardId> general_hand =
+                    general->hand(static_cast<Seat>(seat));
+                EXPECT_EQ(compact_hand, general_hand)
+                    << "seed " << seed << " ply " << ply << " seat " << seat;
+                EXPECT_EQ(
+                    compact->tricks_won(static_cast<Seat>(seat)),
+                    general->tricks_won(static_cast<Seat>(seat)));
+            }
+            const std::vector<Action> compact_actions = compact->legal_actions();
+            const std::vector<Action> general_actions = general->legal_actions();
+            ASSERT_EQ(compact_actions, general_actions)
+                << "seed " << seed << " ply " << ply;
+            const auto& identity = compact->identity();
+            const PositionIdentity reference =
+                recompute_position_identity(*compact);
+            EXPECT_EQ(identity.primary, reference.primary)
+                << "seed " << seed << " ply " << ply;
+            EXPECT_EQ(identity.verifier, reference.verifier)
+                << "seed " << seed << " ply " << ply;
+
+            state ^= state << 13U;
+            state ^= state >> 17U;
+            state ^= state << 5U;
+            const std::size_t pick = state % compact_actions.size();
+            ASSERT_TRUE(compact->apply(compact_actions[pick]));
+            ASSERT_TRUE(general->apply(general_actions[pick]));
+            ++applied;
+        }
+
+        // Unwind everything and compare the initial state again.
+        for (int ply = 0; ply < applied; ++ply) {
+            compact->undo();
+            general->undo();
+        }
+        for (int seat = 0; seat < 4; ++seat) {
+            const std::vector<CardId> compact_hand =
+                compact->hand(static_cast<Seat>(seat));
+            const std::vector<CardId> general_hand =
+                general->hand(static_cast<Seat>(seat));
+            EXPECT_EQ(compact_hand, general_hand) << "seed " << seed;
+            EXPECT_EQ(
+                compact->tricks_won(static_cast<Seat>(seat)),
+                general->tricks_won(static_cast<Seat>(seat)));
+        }
+        EXPECT_EQ(compact->tricks_remaining(), general->tricks_remaining());
+        EXPECT_EQ(compact->next_player(), general->next_player());
+        const auto& rewound = compact->identity();
+        const PositionIdentity rewound_reference =
+            recompute_position_identity(*compact);
+        EXPECT_EQ(rewound.primary, rewound_reference.primary);
+        EXPECT_EQ(rewound.verifier, rewound_reference.verifier);
+    }
 }
 
 TEST(PositionTest, ShareableIdentityMergesEquivalentCardsAfterATrick)

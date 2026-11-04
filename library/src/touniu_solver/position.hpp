@@ -40,6 +40,8 @@ public:
     [[nodiscard]] auto is_finished() const -> bool;
     [[nodiscard]] auto current_trick() const -> const Trick&;
     [[nodiscard]] auto hand(Seat seat) const -> const std::vector<CardId>&;
+    [[nodiscard]] auto hand_size(Seat seat) const -> std::uint32_t;
+    [[nodiscard]] auto uses_compact_operations() const -> bool;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
     [[nodiscard]] auto card_catalog() const -> const std::vector<Card>&;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;
@@ -155,16 +157,45 @@ private:
     void update_holdings(Seat seat, CardId id, bool set);
     void retire_trick_cards(const Trick& trick);
     void prune_reached_predictions();
+    // Compact operations for deals whose universe is only ordinary single-suit
+    // cards. Hands live in bitmasks over the deal universe, so move generation
+    // and make/undo perform no catalog lookups and no vector edits; the
+    // CardId view is materialized on demand for the public API.
+    struct FastUndo {
+        bool pass = false;
+        bool completed = false;
+        std::uint8_t seat = 0;
+        std::uint8_t bucket = 0;
+        std::uint8_t bit = 0;
+        Seat previous_next_player = Seat::West;
+        std::uint32_t previous_tricks_remaining = 0;
+        std::array<std::uint32_t, 4> previous_tricks_won{};
+        std::array<std::uint64_t, 5> previous_live_mask{};
+        std::array<TrickPlay, 4> previous_trick{};
+        std::uint32_t previous_trick_size = 0;
+    };
+    void build_fast_state();
+    auto materialize_hands() const -> const std::array<std::vector<CardId>, 4>&;
+    void materialize_trick() const;
+    [[nodiscard]] auto fast_slot(CardId id) const -> std::uint32_t;
+    [[nodiscard]] auto fast_rank(std::uint8_t bucket, std::uint8_t bit) const
+        -> std::int32_t;
+    void legal_actions_fast(ActionList& out) const;
+    void apply_fast(const Action& action);
+    void undo_fast();
+    void finish_trick_fast(FastUndo& record);
+    [[nodiscard]] auto resolve_trick_fast() const -> Seat;
+
     [[nodiscard]] auto universe_bit(CardId id, Suit suit) const
         -> std::optional<std::uint8_t>;
     [[nodiscard]] auto universe_card(std::uint64_t id) -> UniverseCard*;
 
     State state_;
-    Trick current_trick_;
+    mutable Trick current_trick_;
     std::optional<Seat> pending_block_;
     std::uint32_t valid_reverse_count_ = 0;
     std::array<std::uint32_t, 4> tricks_won_{};
-    PositionIdentity identity_;
+    mutable PositionIdentity identity_;
     EquivalenceUniverse universe_;
     std::array<std::uint64_t, 5> live_mask_{};
     // Per-seat holdings over the same bit buckets: four suits plus trumps.
@@ -175,6 +206,21 @@ private:
     // Four-suit and three-flower cards still in hand. They can be played as any
     // suit, so in a suit contract they can ruff a plain lead.
     std::array<std::uint32_t, 4> multi_suit_cards_{};
+    bool fast_active_ = false;
+    std::array<std::array<std::uint64_t, 5>, 4> fast_hands_{};
+    std::array<std::uint32_t, 4> fast_sizes_{};
+    std::array<TrickPlay, 4> fast_trick_{};
+    std::uint32_t fast_trick_size_ = 0;
+    std::vector<FastUndo> fast_undo_;
+    // Original deal order as universe slots, so materialized hands reproduce
+    // the same card order as the general path.
+    std::array<std::array<std::uint32_t, 16>, 4> fast_order_{};
+    std::array<std::uint32_t, 4> fast_order_count_{};
+    // Open-addressed id -> (bucket << 8 | bit) index over the deal universe.
+    std::array<std::uint32_t, 256> slot_index_{};
+    mutable std::array<std::vector<CardId>, 4> hand_cache_;
+    mutable bool hand_cache_valid_ = false;
+    mutable bool identity_valid_ = true;
     // True when the deal universe is only ordinary single-suit cards, which is
     // what makes the rank-compressed table key sound.
     bool shareable_identity_ = false;
@@ -183,6 +229,10 @@ private:
     std::array<std::array<std::uint8_t, 64>, 5> owner_of_{};
     std::vector<UndoRecord> undo_stack_;
 };
+
+// Test hook: build positions with the general CardId operations even when the
+// deal is plain, so the compact and the general paths can be compared.
+void set_compact_operations_disabled_for_testing(bool disabled);
 
 // Reference identity recomputed from the complete position. The maintained
 // Position::identity() must always equal it; tests use this as the oracle.

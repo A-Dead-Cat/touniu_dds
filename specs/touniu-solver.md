@@ -186,6 +186,15 @@ choice when a card can legally be played.
   play owns. They are cards played in earlier tricks and must stay in the
   catalog so later `+2` draws keep skipping their rank/suit templates; only
   duplicate IDs and duplicate ownership are rejected.
+- A deal whose universe is entirely ordinary single-suit cards is also solved
+  through compact operations: each hand is a bitmask over the deal universe
+  instead of a CardId vector, so move generation, make/undo and trick
+  resolution do no catalog lookups and no vector edits. The public CardId view
+  (hands, current trick, identity) is materialized on demand and preserves the
+  original deal order. Every other deal, and every deal when the test hook
+  `set_compact_operations_disabled_for_testing(true)` is set, keeps the general
+  path; a randomized test plays both side by side and compares hands, trick,
+  legal actions, win counts and identity after every ply and after unwinding.
 - A deal whose universe is entirely ordinary single-suit cards keys the table
   on the rank-compressed owner sequence instead: the live cards are walked in
   rank order per bucket and each records its dense position and owner. Retired
