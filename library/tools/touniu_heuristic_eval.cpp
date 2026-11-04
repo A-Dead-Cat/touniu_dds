@@ -563,16 +563,48 @@ struct TrickLeader {
 auto trick_leader(const Position& position) -> TrickLeader
 {
     TrickLeader leader;
-    for (const TrickPlay& play : position.current_trick()) {
+    const Trick& trick = position.current_trick();
+    const TrickPlay* lead_play = nullptr;
+    for (const TrickPlay& play : trick) {
+        if (!play.action.is_pass()) {
+            lead_play = &play;
+            break;
+        }
+    }
+    if (lead_play == nullptr) return leader;
+    const Card* lead_card = position.card(*lead_play->action.card_id());
+    const bool wild_lead = lead_card != nullptr &&
+        (lead_card->kind() == CardKind::FourSuit ||
+         lead_card->intrinsic_suits().size() == 4U);
+    int best_class = 0;
+    long long best_rank = -1;
+    for (const TrickPlay& play : trick) {
         if (play.action.is_pass()) continue;
         const Card* card = position.card(*play.action.card_id());
         if (card == nullptr) continue;
-        if (leader.card == nullptr ||
-            effective_rank_micro(position, card) >
-                effective_rank_micro(position, leader.card)) {
+        // Mirrors the engine: a discard never wins, trump outranks the led
+        // suit, and a wild lead puts every card in the same class.
+        int card_class = 0;
+        if (wild_lead) {
+            card_class = 1;
+        } else if (acts_as_trump(position, *card)) {
+            card_class = 3;
+        } else if (lead_card != nullptr &&
+                   lead_card->kind() == CardKind::ThreeSuitCat) {
+            card_class = 1;
+        } else {
+            card_class = play.action.effective_suit() ==
+                    lead_play->action.effective_suit() ? 2 : 0;
+        }
+        if (card_class == 0) continue;
+        const long long rank = effective_rank_micro(position, card);
+        if (leader.card == nullptr || card_class > best_class ||
+            (card_class == best_class && rank > best_rank)) {
             leader.play = &play;
             leader.card = card;
             leader.seat = play.seat;
+            best_class = card_class;
+            best_rank = rank;
         }
     }
     if (leader.card != nullptr && leader.card->kind() == CardKind::CherryBomb) {
@@ -1219,21 +1251,8 @@ auto category_of(const Position& position) -> int
     if (position.current_trick().empty()) return 0;
     const Seat me = position.next_player();
     const Seat partner = partner_of(me);
-    // Whoever is currently winning the trick.
-    const TrickPlay* winner = nullptr;
-    for (const TrickPlay& play : position.current_trick()) {
-        if (play.action.is_pass()) continue;
-        if (winner == nullptr) {
-            winner = &play;
-            continue;
-        }
-        const Card* have = position.card(*winner->action.card_id());
-        const Card* other = position.card(*play.action.card_id());
-        if (have != nullptr && other != nullptr && other->rank() > have->rank()) {
-            winner = &play;
-        }
-    }
-    if (winner != nullptr && winner->seat == partner) return 1;
+    const TrickLeader leader = trick_leader(position);
+    if (leader.play != nullptr && leader.seat == partner) return 1;
     return 2;
 }
 
