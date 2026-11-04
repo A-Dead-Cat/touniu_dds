@@ -105,9 +105,10 @@ auto analysis_transposition_slots(const Position& position) -> std::size_t
     if (per_seat == 10U) {
         return 1U << 22U;
     }
-    if (per_seat <= 12U) {
+    if (per_seat <= 13U) {
         return 1U << 24U;
     }
+    // Hands can exceed 13 cards when +2 draws add cards to the deal.
     return 1U << 25U;
 }
 

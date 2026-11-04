@@ -258,7 +258,8 @@ choice when a card can legally be played.
   capacity only adds cache and TLB misses. It uses `2^15` slots up to five
   cards per hand, `2^17` at six, `2^20` at seven, `2^23` at eight and nine,
   `2^22` at ten (the node count there is small enough that a bigger table only
-  costs misses), `2^24` at eleven and twelve, and `2^25` at thirteen.
+  costs misses), and `2^24` from eleven to thirteen. Larger hands, which only
+  +2 draws can produce, fall back to `2^25`.
 - The C ABI currently accepts positions at a trick boundary. Importing an
   already-partially-played trick will be added before TouniuBridge uses the
   solver for mid-trick advice.
