@@ -1063,8 +1063,39 @@ auto Position::leader_sure_tricks() const -> SureTricks
             continue;
         }
         if (leader_top) {
-            // The leader plays first, so an equal rank still wins.
-            ++leader_tops;
+            // The leader plays first, so an equal rank still wins. Beyond the
+            // single top card the leader can cash its whole run of cards that
+            // outrank every opponent card of the suit: each one is led by the
+            // leader and cannot be beaten. An opponent who runs out of the
+            // suit stops the run only if it could ruff afterwards.
+            std::uint64_t opponent_cards = 0;
+            for (std::size_t seat = 0; seat < 4; ++seat) {
+                if (seat == leader_index || seat == partner_index) {
+                    continue;
+                }
+                opponent_cards |= holdings_[seat][suit];
+            }
+            std::uint32_t run = 0;
+            if (opponent_cards == 0) {
+                run = static_cast<std::uint32_t>(
+                    std::popcount(leader_holding[suit]));
+            } else {
+                const int opponent_bit = 63 - std::countl_zero(opponent_cards);
+                const std::uint64_t above = leader_holding[suit] &
+                    ~((std::uint64_t{2} << static_cast<std::uint8_t>(
+                        opponent_bit)) - 1U);
+                run = static_cast<std::uint32_t>(std::popcount(above));
+            }
+            for (std::size_t seat = 0; seat < 4; ++seat) {
+                if (seat == leader_index || seat == partner_index) {
+                    continue;
+                }
+                if (can_ruff(seat)) {
+                    run = std::min(run, static_cast<std::uint32_t>(
+                        std::popcount(holdings_[seat][suit])));
+                }
+            }
+            leader_tops += run;
         } else if (all_follow && !opponent_block) {
             // The partner plays after the opponents, so the top must be
             // strictly above every other live card of the suit.
