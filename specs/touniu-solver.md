@@ -160,11 +160,12 @@ choice when a card can legally be played.
   since those can be played as the trump suit, and a cherry bomb never counts,
   because it hands the trick to the next seat. A suit whose highest live card
   is a plain card held by either partner is sure when the leader holds a real
-  card of the suit to lead it and no opponent can ruff. A leader-held top is
-  counted as a run: every leader card above the opponents' highest card of
-  that suit is another trick, capped by the number of cards such a ruffing
-  opponent still holds in the suit, because the leader keeps the lead and
-  plays first: every opponent either
+  card of the suit to lead it and no opponent can ruff. A top is counted as a
+  run: every card of the hand that won the previous round above the opponents'
+  highest card of that suit is another trick, capped by the number of cards a
+  ruffing opponent still holds in the suit, because the winner keeps the lead
+  and plays first. Both partners use the same rule, so a partner who wins the
+  first round with the suit's top keeps cashing its own high cards: every opponent either
   holds a real card of that suit (so it must follow) or holds no ruffing card
   (trump bucket in no-trump; trump suit, trump bucket or multi-suit card in a
   suit contract). The leader cashes its own suit tops and
