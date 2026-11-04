@@ -36,6 +36,7 @@ struct Args {
     bool signals = false;   // pick the card inside its class by the convention
     bool void_aware = false; // use the voids inferred from the play
     bool full_info = false;  // EW sees all four hands, as double dummy does
+    bool simulate = false;   // value a lead by playing its trick out, plus tempo
 };
 
 auto parse_args(const int argc, char** argv) -> Args
@@ -67,6 +68,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.void_aware = true;
         } else if (flag == "--full-info") {
             args.full_info = true;
+        } else if (flag == "--simulate") {
+            args.simulate = true;
         }
     }
     return args;
@@ -363,7 +366,11 @@ struct PlayTracker {
 // double dummy makes), so it does not need a search to know which suit cashes,
 // which one an opponent can ruff and which one gives the partner a ruff. The
 // cost is a scan of the hands, not a tree.
-auto full_info_lead(const Position& position, const ActionList& legal) -> Action
+auto full_info_lead(
+    const Position& position,
+    const ActionList& legal,
+    double* best_score_out = nullptr,
+    const Card** best_card_out = nullptr) -> Action
 {
     const Seat me = position.next_player();
     const Seat partner = partner_of(me);
@@ -479,6 +486,8 @@ auto full_info_lead(const Position& position, const ActionList& legal) -> Action
             best_card = card;
         }
     }
+    if (best_score_out != nullptr) *best_score_out = best_score;
+    if (best_card_out != nullptr) *best_card_out = best_card;
     return best != nullptr ? *best : legal.front();
 }
 
@@ -505,6 +514,73 @@ auto is_plus_two(const Card* card) -> bool
 auto heuristic_action(
     const Position& position,
     const int lead_rule,
+    const PlayTracker* tracker) -> Action;
+
+// Static quality of being on lead here, for the side that is about to move: the
+// best score its own lead candidates reach. Positive means leading is good for
+// that side, negative means every lead is poisoned.
+auto lead_quality(const Position& position) -> double
+{
+    const ActionList legal = position.legal_actions();
+    if (legal.empty()) return 0.0;
+    double score = 0.0;
+    full_info_lead(position, legal, &score, nullptr);
+    return score;
+}
+
+// Leading a non-bomb rank-15 card before a bomb dominates it: ties go to the
+// earlier card, so the bomb no longer wins and its redirect never happens. A
+// bomb is a liability for whoever holds it, including the partner, because
+// throwing one hands the trick to the seat after the thrower.
+auto dominates_bomb(const Position& position, const Card& card) -> bool
+{
+    if (card.rank().millionths() < 15 * 1'000'000) return false;
+    if (card.kind() == CardKind::CherryBomb) return false;
+    const Seat me = position.next_player();
+    for (int seat = 0; seat < 4; ++seat) {
+        const Seat other = static_cast<Seat>(seat);
+        if (other == me) continue;
+        for (const CardId id : position.hand(other)) {
+            const Card* held = position.card(id);
+            if (held != nullptr && held->kind() == CardKind::CherryBomb) return true;
+        }
+    }
+    return false;
+}
+
+// Play a candidate lead out with all four hands, score the trick, then add a
+// tempo term for who has to lead next. Constant work per candidate.
+auto trick_value(const Position& position, const Action& lead) -> double
+{
+    Position copy = position;
+    const Seat me = position.next_player();
+    const Seat partner = partner_of(me);
+    const auto our_tricks = [](const Position& p) {
+        return static_cast<int>(p.tricks_won(Seat::West) + p.tricks_won(Seat::East));
+    };
+    const int before = our_tricks(copy);
+    if (!copy.apply(lead)) return -1e9;
+    int guard = 0;
+    while (copy.current_trick().size() < 4U && guard < 8) {
+        ++guard;
+        const ActionList legal = copy.legal_actions();
+        if (legal.empty()) break;
+        const Action next = heuristic_action(copy, 0, nullptr);
+        if (!copy.apply(next)) break;
+    }
+    const int delta = our_tricks(copy) - before;
+    double value = delta > 0 ? 1.0 : -1.0;
+    // Winner leads next, so value the position it has to lead from.
+    const double quality = lead_quality(copy);
+    const Seat leader = copy.next_player();
+    const bool we_lead = leader == me || leader == partner;
+    value += (we_lead ? 1.0 : -1.0) * 0.35 * quality;
+    return value;
+}
+
+auto heuristic_action(
+    const Position& position,
+    const int lead_rule,
     const PlayTracker* tracker) -> Action
 {
     const Seat me = position.next_player();
@@ -524,6 +600,22 @@ auto heuristic_action(
 
     if (trick.empty() && lead_rule == 3) {
         return full_info_lead(position, legal);
+    }
+    if (trick.empty() && lead_rule == 4) {
+        const Action* best = nullptr;
+        double best_value = -1e9;
+        for (const Action& action : legal) {
+            if (action.is_pass() || !action.card_id().has_value()) continue;
+            const Card* card = position.card(*action.card_id());
+            if (card == nullptr) continue;
+            double value = trick_value(position, action);
+            if (dominates_bomb(position, *card)) value += 0.4;
+            if (value > best_value) {
+                best_value = value;
+                best = &action;
+            }
+        }
+        return best != nullptr ? *best : legal.front();
     }
     if (trick.empty()) {
         // Leading. With the play tracker we know which seats have shown out of
@@ -785,7 +877,7 @@ auto main(const int argc, char** argv) -> int
                     (void) legal_before;
                     action = heuristic_action(
                     *position,
-                    args.full_info ? 3 : args.lead_rule,
+                    args.simulate ? 4 : (args.full_info ? 3 : args.lead_rule),
                     args.void_aware ? &tracker : nullptr);
                     if (args.signals && action.has_value()) {
                         action = convention_pick(
