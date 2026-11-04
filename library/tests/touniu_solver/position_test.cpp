@@ -631,5 +631,120 @@ TEST(PositionTest, EquivalenceUniverseAccountsForPossibleDraws)
         Action::play(CardId{2}, PlayMode::Lead, suit)));
 }
 
+TEST(PositionTest, LeaderSureTricksCountsTopCardsAndTheHighestTrump)
+{
+    const auto scenario = [](const Contract contract) {
+        Scenario deal;
+        deal.next_player = Seat::West;
+        deal.contract = contract;
+        deal.tricks_remaining = 2;
+        deal.hands[static_cast<int>(Seat::West)] = {
+            normal_card(1, Suit::Spades, 14),
+            normal_card(2, Suit::Hearts, 14),
+        };
+        deal.hands[static_cast<int>(Seat::North)] = {
+            normal_card(3, Suit::Spades, 13),
+            normal_card(4, Suit::Hearts, 13),
+        };
+        deal.hands[static_cast<int>(Seat::East)] = {
+            normal_card(5, Suit::Spades, 12),
+            normal_card(6, Suit::Hearts, 12),
+        };
+        deal.hands[static_cast<int>(Seat::South)] = {
+            normal_card(7, Suit::Spades, 11),
+            normal_card(8, Suit::Hearts, 11),
+        };
+        return deal;
+    };
+
+    auto plain = Position::create(scenario(Contract::NoTrump));
+    ASSERT_TRUE(plain.has_value());
+    const Position::SureTricks plain_sure = plain->leader_sure_tricks();
+    EXPECT_TRUE(plain_sure.north_south == false);
+    EXPECT_EQ(plain_sure.tricks, 2U);
+
+    auto suit_contract = Position::create(scenario(Contract::Spades));
+    ASSERT_TRUE(suit_contract.has_value());
+    EXPECT_EQ(suit_contract->leader_sure_tricks().tricks, 0U);
+
+    // The leader holds the highest trump; a lower trump outside means ordinary
+    // top cards are not sure, but the trump itself is.
+    Scenario with_trumps = scenario(Contract::NoTrump);
+    with_trumps.hands[static_cast<int>(Seat::West)] = {
+        Card::big_joker(CardId{1}),
+        normal_card(2, Suit::Spades, 14),
+    };
+    with_trumps.hands[static_cast<int>(Seat::North)] = {
+        Card::small_joker(CardId{3}),
+        normal_card(4, Suit::Spades, 13),
+    };
+    auto trumps_outside = Position::create(with_trumps);
+    ASSERT_TRUE(trumps_outside.has_value());
+    // Both opponents still hold a spade, so they must follow and cannot ruff;
+    // the trump trick and the spade top are both safe.
+    EXPECT_EQ(trumps_outside->leader_sure_tricks().tricks, 2U);
+
+    // An opponent who is void in spades and holds a trump can ruff, so only
+    // the trump trick remains sure.
+    Scenario void_opponent = with_trumps;
+    void_opponent.hands[static_cast<int>(Seat::North)] = {
+        Card::small_joker(CardId{4}),
+        normal_card(5, Suit::Hearts, 2),
+    };
+    void_opponent.hands[static_cast<int>(Seat::West)] = {
+        Card::big_joker(CardId{1}),
+        normal_card(2, Suit::Spades, 14),
+    };
+    void_opponent.hands[static_cast<int>(Seat::East)] = {
+        normal_card(6, Suit::Spades, 12),
+        normal_card(7, Suit::Hearts, 12),
+    };
+    void_opponent.hands[static_cast<int>(Seat::South)] = {
+        normal_card(8, Suit::Spades, 11),
+        normal_card(9, Suit::Hearts, 11),
+    };
+    auto ruffable = Position::create(void_opponent);
+    ASSERT_TRUE(ruffable.has_value());
+    EXPECT_EQ(ruffable->leader_sure_tricks().tricks, 1U);
+
+    // A four-suit card is not a real spade: its holder is never obliged to
+    // follow, so it cannot make the spade top safe.
+    Scenario four_suit_only = void_opponent;
+    four_suit_only.hands[static_cast<int>(Seat::North)] = {
+        Card::small_joker(CardId{4}),
+        Card::four_suit(CardId{5}, Rank::integer(5)),
+    };
+    auto four_suit_bound = Position::create(four_suit_only);
+    ASSERT_TRUE(four_suit_bound.has_value());
+    EXPECT_EQ(four_suit_bound->leader_sure_tricks().tricks, 1U);
+
+    // All live trumps are in the leader's hand, so the spade top also counts.
+    with_trumps.hands[static_cast<int>(Seat::West)] = {
+        Card::big_joker(CardId{1}),
+        Card::small_joker(CardId{2}),
+        normal_card(3, Suit::Spades, 14),
+    };
+    with_trumps.hands[static_cast<int>(Seat::North)] = {
+        normal_card(4, Suit::Spades, 13),
+        normal_card(5, Suit::Hearts, 2),
+    };
+    with_trumps.hands[static_cast<int>(Seat::East)] = {
+        normal_card(6, Suit::Spades, 12),
+        normal_card(7, Suit::Hearts, 12),
+    };
+    with_trumps.hands[static_cast<int>(Seat::South)] = {
+        normal_card(8, Suit::Spades, 11),
+        normal_card(9, Suit::Hearts, 11),
+    };
+    auto own_trumps = Position::create(with_trumps);
+    ASSERT_TRUE(own_trumps.has_value());
+    EXPECT_EQ(own_trumps->leader_sure_tricks().tricks, 2U);
+
+    // Once the trick has started the bound no longer applies.
+    ASSERT_TRUE(plain->apply(
+        action_for(plain->legal_actions(), CardId{1}, PlayMode::Lead)));
+    EXPECT_EQ(plain->leader_sure_tricks().tricks, 0U);
+}
+
 }  // namespace
 }  // namespace touniu_solver

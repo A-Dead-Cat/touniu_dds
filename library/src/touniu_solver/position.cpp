@@ -1,6 +1,7 @@
 #include "position.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <iterator>
 
@@ -309,10 +310,41 @@ auto Position::universe_card(const std::uint64_t id) -> UniverseCard*
     return &*found;
 }
 
+void Position::update_holdings(
+    const Seat seat,
+    const CardId id,
+    const bool set)
+{
+    UniverseCard* card = universe_card(id.value);
+    if (card == nullptr) {
+        return;
+    }
+    std::array<std::uint64_t, 5>& target = holdings_[seat_index(seat)];
+    const Card* definition = state_.card(id);
+    // A four-suit or three-flower card is never obliged to follow a suit, so
+    // only single-suit cards count toward "must follow".
+    const bool real_suit_cards = definition != nullptr &&
+        definition->intrinsic_suits().size() != 4U &&
+        definition->kind() != CardKind::ThreeSuitCat;
+    if (real_suit_cards) {
+        for (std::uint8_t index = 0; index < card->suit_count; ++index) {
+            const std::uint64_t bit = std::uint64_t{1} << card->bits[index];
+            target[card->suits[index]] = set
+                ? target[card->suits[index]] | bit
+                : target[card->suits[index]] & ~bit;
+        }
+    }
+    if (card->trump_bit != 0xFFU) {
+        const std::uint64_t bit = std::uint64_t{1} << card->trump_bit;
+        target[4] = set ? target[4] | bit : target[4] & ~bit;
+    }
+}
+
 void Position::rebuild_universe()
 {
     universe_ = EquivalenceUniverse{};
     live_mask_ = {};
+    holdings_ = {};
 
     std::size_t plus_two_count = 0;
     for (int seat = 0; seat < 4; ++seat) {
@@ -351,7 +383,7 @@ void Position::rebuild_universe()
     }
 
     std::array<std::vector<std::pair<std::int32_t, std::uint64_t>>, 4> entries;
-    std::vector<std::uint64_t> trump_entries;
+    std::vector<std::pair<std::int32_t, std::uint64_t>> trump_entries;
     const auto add_capable = [&entries, &trump_entries](const Card& card) {
         const auto rank = card.rank().millionths();
         const std::uint64_t id = card.id().value;
@@ -360,7 +392,7 @@ void Position::rebuild_universe()
             return;
         }
         if (card.kind() == CardKind::BigJoker || card.kind() == CardKind::SmallJoker) {
-            trump_entries.push_back(id);
+            trump_entries.push_back({rank, id});
             return;
         }
         if (card.intrinsic_suits().size() == 4U ||
@@ -377,7 +409,7 @@ void Position::rebuild_universe()
         }
         // NoTrump-suit cards and NoTrump-suit specials are trump in no-trump
         // contracts, so no ordinary top card is a sure trick while they live.
-        trump_entries.push_back(id);
+        trump_entries.push_back({rank, id});
     };
 
     for (const CardId id : live) {
@@ -444,16 +476,37 @@ void Position::rebuild_universe()
         }
     }
 
+    // Bits follow rank order so the highest live trump is the highest set bit.
     std::sort(trump_entries.begin(), trump_entries.end());
     trump_entries.erase(
-        std::unique(trump_entries.begin(), trump_entries.end()),
+        std::unique(
+            trump_entries.begin(),
+            trump_entries.end(),
+            [](const auto& left, const auto& right) {
+                return left.second == right.second;
+            }),
         trump_entries.end());
     if (trump_entries.size() > 64U) {
         universe_.trump_overflow = true;
     } else {
-        universe_.trump_cards = trump_entries;
+        universe_.trump_cards.resize(trump_entries.size());
         for (std::size_t index = 0; index < trump_entries.size(); ++index) {
-            UniverseCard* card = universe_card(trump_entries[index]);
+            universe_.trump_cards[index] = trump_entries[index].second;
+            {
+                UniverseCard entry;
+                entry.id = trump_entries[index].second;
+                const auto position = std::lower_bound(
+                    universe_.cards.begin(),
+                    universe_.cards.end(),
+                    entry.id,
+                    [](const UniverseCard& existing, const std::uint64_t value) {
+                        return existing.id < value;
+                    });
+                if (position == universe_.cards.end() || position->id != entry.id) {
+                    universe_.cards.insert(position, entry);
+                }
+            }
+            UniverseCard* card = universe_card(trump_entries[index].second);
             if (card != nullptr) {
                 card->trump_bit = static_cast<std::uint8_t>(index);
             }
@@ -463,6 +516,11 @@ void Position::rebuild_universe()
 
     live_mask_ = universe_.masks;
     universe_.enabled = true;
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+            update_holdings(static_cast<Seat>(seat), id, true);
+        }
+    }
 }
 
 void Position::retire_trick_cards(const Trick& trick)
@@ -526,28 +584,91 @@ auto Position::leader_sure_tricks() const -> SureTricks
         universe_.trump_overflow) {
         return result;
     }
-    if (live_mask_[4] != 0) {
-        return result;
-    }
     const Seat leader = state_.next_player();
     result.north_south = leader == Seat::North || leader == Seat::South;
-    const std::vector<CardId>& hand = state_.hand(leader);
+    const std::array<std::uint64_t, 5>& leader_holding =
+        holdings_[seat_index(leader)];
+
     std::uint32_t count = 0;
+    bool trump_outside_leader = false;
+    // Trump-like cards: the highest live one is a sure trick when the leader
+    // holds it, because every other trump has a lower rank and a led trump
+    // cannot be beaten by an ordinary card. Lower trumps outside the leader's
+    // hand still invalidate ordinary top cards, since they can ruff or take
+    // over the lead.
+    const std::uint64_t live_trumps = live_mask_[4];
+    if (live_trumps != 0) {
+        const int top_bit = 63 - std::countl_zero(live_trumps);
+        for (int bit = 0; bit <= top_bit; ++bit) {
+            if (((live_trumps >> bit) & 1U) == 0U) {
+                continue;
+            }
+            const std::uint64_t trump_bit =
+                std::uint64_t{1} << static_cast<std::uint8_t>(bit);
+            if ((leader_holding[4] & trump_bit) != 0) {
+                if (bit == top_bit) {
+                    ++count;
+                }
+            } else {
+                trump_outside_leader = true;
+            }
+        }
+    }
+    if (trump_outside_leader) {
+        const auto partner = static_cast<Seat>(
+            (static_cast<int>(leader) + 2) % 4);
+        const std::array<std::uint64_t, 5>& partner_holding =
+            holdings_[seat_index(partner)];
+        const std::size_t partner_trumps =
+            std::popcount(partner_holding[4]);
+        const bool partner_has_non_trump =
+            state_.hand(partner).size() > partner_trumps;
+        // A top card is still sure when every opponent must follow suit (they
+        // cannot ruff) and the partner can follow or discard a non-trump.
+        for (std::size_t suit = 0; suit < 4; ++suit) {
+            const std::uint64_t live = live_mask_[suit];
+            if (live == 0) {
+                continue;
+            }
+            const int bit = 63 - std::countl_zero(live);
+            const std::uint64_t id =
+                universe_.ids[suit][static_cast<std::size_t>(bit)];
+            const Card* card = state_.card(CardId{id});
+            if (card == nullptr || !is_plain_single_suit(*card) ||
+                (leader_holding[suit] & (std::uint64_t{1} << bit)) == 0) {
+                continue;
+            }
+            bool safe = partner_holding[suit] != 0 ||
+                        partner_holding[4] == 0 || partner_has_non_trump;
+            for (int seat = 0; seat < 4 && safe; ++seat) {
+                const Seat other = static_cast<Seat>(seat);
+                if (other == leader || other == partner) {
+                    continue;
+                }
+                const std::array<std::uint64_t, 5>& holding =
+                    holdings_[seat_index(other)];
+                if (holding[suit] == 0 && holding[4] != 0) {
+                    safe = false;
+                }
+            }
+            if (safe) {
+                ++count;
+            }
+        }
+        result.tricks = std::min(count, state_.tricks_remaining());
+        return result;
+    }
+    // No trump outside the leader's hand: every top card is safe.
     for (std::size_t suit = 0; suit < 4; ++suit) {
         const std::uint64_t live = live_mask_[suit];
         if (live == 0) {
             continue;
         }
-        int bit = 63;
-        while (((live >> bit) & 1U) == 0U) {
-            --bit;
-        }
+        const int bit = 63 - std::countl_zero(live);
         const std::uint64_t id = universe_.ids[suit][static_cast<std::size_t>(bit)];
         const Card* card = state_.card(CardId{id});
-        if (card == nullptr || !is_plain_single_suit(*card)) {
-            continue;
-        }
-        if (std::find(hand.begin(), hand.end(), CardId{id}) == hand.end()) {
+        if (card == nullptr || !is_plain_single_suit(*card) ||
+            (leader_holding[suit] & (std::uint64_t{1} << bit)) == 0) {
             continue;
         }
         ++count;
@@ -697,10 +818,16 @@ void Position::undo()
          ++drawn) {
         state_.remove_from_hand(record.draw_target, *drawn);
         state_.remove_from_catalog(*drawn);
+        if (universe_.enabled) {
+            update_holdings(record.draw_target, *drawn, false);
+        }
     }
 
     if (!record.is_pass) {
         state_.insert_into_hand(record.player, record.hand_index, record.card);
+        if (universe_.enabled) {
+            update_holdings(record.player, record.card, true);
+        }
     }
 
     state_.set_draw_index(record.previous_draw_index);
@@ -901,6 +1028,9 @@ void Position::remove_hand_card(const Seat seat, const CardId id)
     if (!state_.remove_from_hand(seat, id)) {
         return;
     }
+    if (universe_.enabled) {
+        update_holdings(seat, id, false);
+    }
     identity_tokens::combine(
         identity_, identity_tokens::DomainHandSize, seat_bits | previous_size);
     identity_tokens::combine(
@@ -923,6 +1053,9 @@ auto Position::draw_floating(const Seat seat) -> Card
             // shortcut; the search falls back to the reference predicate.
             universe_.enabled = false;
             live_mask_ = {};
+            holdings_ = {};
+        } else {
+            update_holdings(seat, card.id(), true);
         }
     }
 

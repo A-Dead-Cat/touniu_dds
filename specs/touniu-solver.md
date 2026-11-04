@@ -144,11 +144,15 @@ choice when a card can legally be played.
   draw. The predicate is a per-suit rank mask over the precomputed universe, so
   the check costs a few lookups instead of scanning every hand. The analysis
   root always reports every legal action.
-- At a no-trump lead, when no live card is a joker or carries the NoTrump suit,
-  every suit whose highest live card sits in the leader's hand is a guaranteed
-  trick for the leader's partnership: the card cannot be beaten, so the same
-  seat keeps the lead and can cash the next one. The search uses this count only
-  to tighten the natural window; it never reports a bound as an exact value.
+- At a no-trump lead the search counts sure tricks for the leader's
+  partnership. The highest live trump-like card is sure when the leader holds
+  it. A suit whose highest live card the leader holds is sure when every
+  opponent either holds a real card of that suit (so it must follow and cannot
+  ruff) or holds no trump-like card, and the partner can follow or discard a
+  non-trump; four-suit and three-flower cards never create a follow obligation.
+  Retiring a trick removes the played cards from the per-seat holdings, which
+  are bitmasks over the same deal-universe buckets. The count only tightens the
+  natural window and is never reported as an exact value.
 - Imported positions may contain special cards whose single suit is NoTrump
   (`+2NT`, `🚫NT`, `🔄NT`, `🍒NT`), matching the Playground palette. In a
   no-trump contract such a card is trump for trick resolution; when it is not

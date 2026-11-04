@@ -134,6 +134,7 @@ private:
         bool trump_overflow = false;
     };
     void rebuild_universe();
+    void update_holdings(Seat seat, CardId id, bool set);
     void retire_trick_cards(const Trick& trick);
     void prune_reached_predictions();
     [[nodiscard]] auto universe_bit(CardId id, Suit suit) const
@@ -148,6 +149,8 @@ private:
     PositionIdentity identity_;
     EquivalenceUniverse universe_;
     std::array<std::uint64_t, 5> live_mask_{};
+    // Per-seat holdings over the same bit buckets: four suits plus trumps.
+    std::array<std::array<std::uint64_t, 5>, 4> holdings_{};
     std::vector<UndoRecord> undo_stack_;
 };
 
