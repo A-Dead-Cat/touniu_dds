@@ -22,6 +22,7 @@ struct Args {
     bool contract_table = false;
     bool batch_only = false;
     bool special_deck = false;
+    int specials = 0;
     bool narrow_equivalence = false;
     bool exact_key = false;
     bool verify_key = false;
@@ -62,6 +63,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.batch_only = true;
         } else if (flag == "--special") {
             args.special_deck = true;
+        } else if (flag == "--specials" && next(value)) {
+            args.specials = static_cast<int>(value);
         } else if (flag == "--narrow-equivalence") {
             args.narrow_equivalence = true;
         } else if (flag == "--exact-key") {
@@ -70,19 +73,25 @@ auto parse_args(const int argc, char** argv) -> Args
             args.verify_key = true;
         }
     }
+    if (args.specials > 0) {
+        args.special_deck = true;
+    } else if (args.special_deck) {
+        args.specials = 28;
+    }
     if (args.cards < 1) args.cards = 1;
     if (args.cards > 13) args.cards = 13;
     if (args.samples < 1) args.samples = 1;
     return args;
 }
 
-auto make_deck(const bool special) -> std::vector<touniu_solver::Card>
+auto make_deck(const int special_count) -> std::vector<touniu_solver::Card>
 {
+    const bool special = special_count != 0;
     using namespace touniu_solver;
     const std::array<Suit, 4> suits{
         Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs};
     std::vector<Card> deck;
-    deck.reserve(special ? 80U : 52U);
+    deck.reserve(80U);
     std::uint64_t id = 1;
     for (const Suit suit : suits) {
         for (int rank = 2; rank <= 14; ++rank) {
@@ -93,6 +102,7 @@ auto make_deck(const bool special) -> std::vector<touniu_solver::Card>
     if (!special) {
         return deck;
     }
+    const std::size_t base = deck.size();
     for (const Suit suit : suits) {
         deck.push_back(Card::block(CardId{id++}, suit));
         deck.push_back(Card::reverse(CardId{id++}, suit));
@@ -108,6 +118,13 @@ auto make_deck(const bool special) -> std::vector<touniu_solver::Card>
     for (const int rank : {4, 6, 8, 10, 12}) {
         deck.push_back(Card::no_trump(CardId{id++}, Rank::integer(rank)));
     }
+    if (special_count > 0 &&
+        static_cast<std::size_t>(special_count) < deck.size() - base) {
+        deck.erase(
+            deck.begin() + static_cast<std::ptrdiff_t>(
+                base + static_cast<std::size_t>(special_count)),
+            deck.end());
+    }
     return deck;
 }
 
@@ -122,10 +139,10 @@ auto xorshift32(std::uint32_t& state) -> std::uint32_t
 auto build_scenario(
     const int cards,
     const std::uint32_t seed,
-    const bool special) -> touniu_solver::Scenario
+    const int specials) -> touniu_solver::Scenario
 {
     using namespace touniu_solver;
-    std::vector<Card> deck = make_deck(special);
+    std::vector<Card> deck = make_deck(specials);
     std::uint32_t state = seed;
     for (int index = static_cast<int>(deck.size()) - 1; index >= 1; --index) {
         const std::uint32_t swap =
@@ -208,7 +225,7 @@ int main(int argc, char** argv)
             const Scenario base = build_scenario(
                 args.cards,
                 args.seed + static_cast<std::uint32_t>(sample),
-                args.special_deck);
+                args.specials);
             std::vector<int> values_v2;
             std::vector<int> values_batch;
             unsigned long long sample_v2 = 0;
@@ -355,7 +372,7 @@ int main(int argc, char** argv)
         const Scenario scenario = build_scenario(
             args.cards,
             args.seed + static_cast<std::uint32_t>(sample),
-            args.special_deck);
+            args.specials);
         auto position = Position::create(scenario);
         if (!position.has_value()) {
             std::fprintf(stderr, "failed to create position\n");
