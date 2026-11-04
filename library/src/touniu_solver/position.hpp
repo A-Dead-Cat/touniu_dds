@@ -61,6 +61,15 @@ public:
         const Action& left,
         const Action& right) const -> bool;
 
+    // Lower-bound quick tricks for the side that is about to lead: in a
+    // no-trump position with no live NoTrump-suit or joker card, each suit
+    // whose highest live card is in the leader's hand is a sure trick.
+    struct SureTricks {
+        bool north_south = false;
+        std::uint32_t tricks = 0;
+    };
+    [[nodiscard]] auto leader_sure_tricks() const -> SureTricks;
+
 private:
     friend auto recompute_position_identity(const Position& position)
         -> PositionIdentity;
@@ -78,7 +87,7 @@ private:
         std::optional<Seat> previous_pending_block;
         std::uint32_t previous_valid_reverse_count = 0;
         std::array<std::uint32_t, 4> previous_tricks_won{};
-        std::array<std::uint64_t, 4> previous_live_mask{};
+        std::array<std::uint64_t, 5> previous_live_mask{};
         PositionIdentity previous_identity;
         Seat draw_target = Seat::West;
         std::vector<CardId> drawn_cards;
@@ -111,14 +120,18 @@ private:
         std::uint8_t suit_count = 0;
         std::array<std::uint8_t, 4> suits{};
         std::array<std::uint8_t, 4> bits{};
+        std::uint8_t trump_bit = 0xFF;
     };
     struct EquivalenceUniverse {
         bool enabled = false;
         std::array<std::vector<std::pair<std::int32_t, std::uint8_t>>, 4> ranks;
+        std::array<std::vector<std::uint64_t>, 4> ids;
         std::array<std::vector<std::uint64_t>, 4> prefix_masks;
-        std::array<std::uint64_t, 4> masks{};
+        std::array<std::uint64_t, 5> masks{};
         std::vector<UniverseCard> cards;
         std::vector<std::uint64_t> predicted_ids;
+        std::vector<std::uint64_t> trump_cards;
+        bool trump_overflow = false;
     };
     void rebuild_universe();
     void retire_trick_cards(const Trick& trick);
@@ -134,7 +147,7 @@ private:
     std::array<std::uint32_t, 4> tricks_won_{};
     PositionIdentity identity_;
     EquivalenceUniverse universe_;
-    std::array<std::uint64_t, 4> live_mask_{};
+    std::array<std::uint64_t, 5> live_mask_{};
     std::vector<UndoRecord> undo_stack_;
 };
 

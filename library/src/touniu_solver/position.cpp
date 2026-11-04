@@ -351,7 +351,8 @@ void Position::rebuild_universe()
     }
 
     std::array<std::vector<std::pair<std::int32_t, std::uint64_t>>, 4> entries;
-    const auto add_capable = [&entries](const Card& card) {
+    std::vector<std::uint64_t> trump_entries;
+    const auto add_capable = [&entries, &trump_entries](const Card& card) {
         const auto rank = card.rank().millionths();
         const std::uint64_t id = card.id().value;
         if (is_plain_single_suit(card)) {
@@ -359,6 +360,7 @@ void Position::rebuild_universe()
             return;
         }
         if (card.kind() == CardKind::BigJoker || card.kind() == CardKind::SmallJoker) {
+            trump_entries.push_back(id);
             return;
         }
         if (card.intrinsic_suits().size() == 4U ||
@@ -371,7 +373,11 @@ void Position::rebuild_universe()
         if (card.intrinsic_suits().size() == 1U &&
             card.intrinsic_suits().front() != Suit::NoTrump) {
             entries[suit_index(card.intrinsic_suits().front())].push_back({rank, id});
+            return;
         }
+        // NoTrump-suit cards and NoTrump-suit specials are trump in no-trump
+        // contracts, so no ordinary top card is a sure trick while they live.
+        trump_entries.push_back(id);
     };
 
     for (const CardId id : live) {
@@ -401,9 +407,11 @@ void Position::rebuild_universe()
             return;
         }
         universe_.ranks[suit].resize(list.size());
+        universe_.ids[suit].resize(list.size());
         for (std::size_t index = 0; index < list.size(); ++index) {
             universe_.ranks[suit][index] = {
                 list[index].first, static_cast<std::uint8_t>(index)};
+            universe_.ids[suit][index] = list[index].second;
             {
                 UniverseCard card;
                 card.id = list[index].second;
@@ -436,6 +444,23 @@ void Position::rebuild_universe()
         }
     }
 
+    std::sort(trump_entries.begin(), trump_entries.end());
+    trump_entries.erase(
+        std::unique(trump_entries.begin(), trump_entries.end()),
+        trump_entries.end());
+    if (trump_entries.size() > 64U) {
+        universe_.trump_overflow = true;
+    } else {
+        universe_.trump_cards = trump_entries;
+        for (std::size_t index = 0; index < trump_entries.size(); ++index) {
+            UniverseCard* card = universe_card(trump_entries[index]);
+            if (card != nullptr) {
+                card->trump_bit = static_cast<std::uint8_t>(index);
+            }
+            universe_.masks[4] |= std::uint64_t{1} << static_cast<std::uint8_t>(index);
+        }
+    }
+
     live_mask_ = universe_.masks;
     universe_.enabled = true;
 }
@@ -456,6 +481,9 @@ void Position::retire_trick_cards(const Trick& trick)
         for (std::uint8_t index = 0; index < card->suit_count; ++index) {
             live_mask_[card->suits[index]] &=
                 ~(std::uint64_t{1} << card->bits[index]);
+        }
+        if (card->trump_bit != 0xFFU) {
+            live_mask_[4] &= ~(std::uint64_t{1} << card->trump_bit);
         }
     }
 }
@@ -488,6 +516,44 @@ void Position::prune_reached_predictions()
                 ~(std::uint64_t{1} << card->bits[index]);
         }
     }
+}
+
+auto Position::leader_sure_tricks() const -> SureTricks
+{
+    SureTricks result;
+    if (state_.contract() != Contract::NoTrump || !current_trick_.empty() ||
+        pending_block_.has_value() || !universe_.enabled ||
+        universe_.trump_overflow) {
+        return result;
+    }
+    if (live_mask_[4] != 0) {
+        return result;
+    }
+    const Seat leader = state_.next_player();
+    result.north_south = leader == Seat::North || leader == Seat::South;
+    const std::vector<CardId>& hand = state_.hand(leader);
+    std::uint32_t count = 0;
+    for (std::size_t suit = 0; suit < 4; ++suit) {
+        const std::uint64_t live = live_mask_[suit];
+        if (live == 0) {
+            continue;
+        }
+        int bit = 63;
+        while (((live >> bit) & 1U) == 0U) {
+            --bit;
+        }
+        const std::uint64_t id = universe_.ids[suit][static_cast<std::size_t>(bit)];
+        const Card* card = state_.card(CardId{id});
+        if (card == nullptr || !is_plain_single_suit(*card)) {
+            continue;
+        }
+        if (std::find(hand.begin(), hand.end(), CardId{id}) == hand.end()) {
+            continue;
+        }
+        ++count;
+    }
+    result.tricks = std::min(count, state_.tricks_remaining());
+    return result;
 }
 
 auto Position::equivalent_actions(const Action& left, const Action& right) const

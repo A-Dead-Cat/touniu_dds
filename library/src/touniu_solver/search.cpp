@@ -384,8 +384,26 @@ private:
         if (options_.stats != nullptr) {
             ++options_.stats->nodes;
         }
-        const int low = score_ns(position);
-        const int high = low + static_cast<int>(position.tricks_remaining());
+        int low = score_ns(position);
+        int high = low + static_cast<int>(position.tricks_remaining());
+        if (low != high) {
+            // Sure-trick lower bound: at a no-trump lead with no live trump-like
+            // card, every suit whose highest live card is in the leader's hand
+            // is a guaranteed trick for the leader's partnership.
+            const Position::SureTricks sure = position.leader_sure_tricks();
+            if (sure.tricks > 0U) {
+                const int count = static_cast<int>(sure.tricks);
+                if (sure.north_south) {
+                    low += count;
+                } else {
+                    const int total = total_tricks(position);
+                    const int east_west = static_cast<int>(
+                        position.tricks_won(Seat::West) +
+                        position.tricks_won(Seat::East));
+                    high = std::min(high, total - (east_west + count));
+                }
+            }
+        }
         if (low == high) {
             return {low, Bound::Exact};
         }
