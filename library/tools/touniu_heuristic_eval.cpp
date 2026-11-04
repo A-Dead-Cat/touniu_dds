@@ -572,6 +572,42 @@ auto dominates_bomb(const Position& position, const Card& card) -> bool
     return partner_bomb_forced(position, card.intrinsic_suits().front());
 }
 
+// The bomb in the partner's hand is a dormant liability: it costs a trick the
+// moment an opponent leads its suit and the partner is forced to follow with
+// it. That can only be prevented while we act before the partner in the same
+// trick, so the window closes as soon as the opponents get the lead.
+auto bomb_liability(const Position& position) -> double
+{
+    const Seat leader = position.next_player();
+    const Seat partner = partner_of(leader);
+    // Only the side that is about to lead can force it, and only against us.
+    const auto& hand = position.hand(partner);
+    for (const CardId id : hand) {
+        const Card* card = position.card(id);
+        if (card == nullptr || card->kind() != CardKind::CherryBomb) continue;
+        if (card->intrinsic_suits().size() != 1U) continue;
+        const Suit suit = card->intrinsic_suits().front();
+        // The partner is forced only when the bomb is its only card of the suit.
+        std::size_t suit_cards = 0;
+        for (const CardId other : hand) {
+            const Card* held = position.card(other);
+            if (held == nullptr || held->intrinsic_suits().size() != 1U) continue;
+            if (held->intrinsic_suits().front() == suit) ++suit_cards;
+        }
+        if (suit_cards != 1U) continue;
+        // Can the side on lead actually lead it?
+        std::size_t lead_suit_cards = 0;
+        for (const CardId other : position.hand(leader)) {
+            const Card* held = position.card(other);
+            if (held == nullptr || held->intrinsic_suits().size() != 1U) continue;
+            if (held->intrinsic_suits().front() == suit) ++lead_suit_cards;
+        }
+        if (lead_suit_cards == 0U) continue;
+        return 1.0;
+    }
+    return 0.0;
+}
+
 // Play a candidate lead out with all four hands, score the trick, then add a
 // tempo term for who has to lead next. Constant work per candidate.
 auto trick_value(const Position& position, const Action& lead) -> double
@@ -599,6 +635,11 @@ auto trick_value(const Position& position, const Action& lead) -> double
     const Seat leader = copy.next_player();
     const bool we_lead = leader == me || leader == partner;
     value += (we_lead ? 1.0 : -1.0) * 0.35 * quality;
+    // If the opponents take the lead with the partner still holding a forced
+    // bomb, that bomb is worth a trick to them unless we covered it here.
+    if (!we_lead) {
+        value -= bomb_liability(copy);
+    }
     return value;
 }
 
