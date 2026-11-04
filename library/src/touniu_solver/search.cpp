@@ -73,6 +73,12 @@ auto transposition_slots(
     if (per_seat == 7U) {
         return 1U << 20U;
     }
+    if (per_seat >= 12U) {
+        // Twelve and thirteen cards evict more than the 2^22 table can hold;
+        // measured on the fixed deal, 2^22 does not finish a table in thirteen
+        // minutes while 2^24 finishes it in 156 s.
+        return capacity == ContractTableCapacity::LowMemory ? 1U << 22U : 1U << 24U;
+    }
     return capacity == ContractTableCapacity::LowMemory ? 1U << 20U : 1U << 22U;
 }
 
