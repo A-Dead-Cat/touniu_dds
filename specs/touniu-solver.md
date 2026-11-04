@@ -146,13 +146,21 @@ choice when a card can legally be played.
   root always reports every legal action.
 - At a no-trump lead the search counts sure tricks for the leader's
   partnership. The highest live trump-like card is sure when the leader holds
-  it. A suit whose highest live card the leader holds is sure when every
-  opponent either holds a real card of that suit (so it must follow and cannot
-  ruff) or holds no trump-like card, and the partner can follow or discard a
-  non-trump; four-suit and three-flower cards never create a follow obligation.
-  Retiring a trick removes the played cards from the per-seat holdings, which
-  are bitmasks over the same deal-universe buckets. The count only tightens the
-  natural window and is never reported as an exact value.
+  it. A suit whose highest live card is a plain card held by either partner is
+  sure when the leader holds a real card of the suit to lead it and no opponent
+  can ruff: every opponent either holds a real card of that suit (so it must
+  follow) or holds no trump-like card. The leader cashes its own suit tops and
+  keeps the lead, then the trump; partner-held tops are cashed afterwards. A
+  partner top additionally requires that it is strictly above every other live
+  card of the suit (the opponents play first, so an equal rank could win by
+  tie), that no opponent still holds a block card, and that the partner has
+  enough cards to cover the leader's tops it cannot follow, so a forced discard
+  can never throw a needed top away. Four-suit and three-flower cards never
+  create a follow obligation; in no-trump a three-flower cat is compared with
+  rank 0.999999, and the deal universe sorts it accordingly. Retiring a trick
+  removes the played cards from the per-seat holdings, which are bitmasks over
+  the same deal-universe buckets. The count only tightens the natural window
+  and is never reported as an exact value.
 - Imported positions may contain special cards whose single suit is NoTrump
   (`+2NT`, `🚫NT`, `🔄NT`, `🍒NT`), matching the Playground palette. In a
   no-trump contract such a card is trump for trick resolution; when it is not

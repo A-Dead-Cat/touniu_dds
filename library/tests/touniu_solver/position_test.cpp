@@ -740,6 +740,50 @@ TEST(PositionTest, LeaderSureTricksCountsTopCardsAndTheHighestTrump)
     ASSERT_TRUE(own_trumps.has_value());
     EXPECT_EQ(own_trumps->leader_sure_tricks().tricks, 2U);
 
+    // A partner's top card is a sure trick when both partners hold the suit.
+    Scenario partner_top;
+    partner_top.next_player = Seat::West;
+    partner_top.contract = Contract::NoTrump;
+    partner_top.tricks_remaining = 1;
+    partner_top.hands[static_cast<int>(Seat::West)] = {
+        normal_card(1, Suit::Spades, 2),
+    };
+    partner_top.hands[static_cast<int>(Seat::East)] = {
+        normal_card(2, Suit::Spades, 14),
+    };
+    partner_top.hands[static_cast<int>(Seat::North)] = {
+        normal_card(3, Suit::Spades, 13),
+    };
+    partner_top.hands[static_cast<int>(Seat::South)] = {
+        normal_card(4, Suit::Spades, 3),
+    };
+    auto partner_top_position = Position::create(partner_top);
+    ASSERT_TRUE(partner_top_position.has_value());
+    EXPECT_EQ(partner_top_position->leader_sure_tricks().tricks, 1U);
+
+    // The partner's only card is needed for the counted suit, so cashing the
+    // trump first would force a discard that breaks it. Only one trick counts.
+    Scenario conflict;
+    conflict.next_player = Seat::West;
+    conflict.contract = Contract::NoTrump;
+    conflict.tricks_remaining = 2;
+    conflict.hands[static_cast<int>(Seat::West)] = {
+        Card::big_joker(CardId{1}),
+        normal_card(2, Suit::Spades, 2),
+    };
+    conflict.hands[static_cast<int>(Seat::East)] = {
+        normal_card(3, Suit::Spades, 14),
+    };
+    conflict.hands[static_cast<int>(Seat::North)] = {
+        normal_card(4, Suit::Spades, 13),
+    };
+    conflict.hands[static_cast<int>(Seat::South)] = {
+        normal_card(5, Suit::Spades, 3),
+    };
+    auto conflict_position = Position::create(conflict);
+    ASSERT_TRUE(conflict_position.has_value());
+    EXPECT_EQ(conflict_position->leader_sure_tricks().tricks, 1U);
+
     // Once the trick has started the bound no longer applies.
     ASSERT_TRUE(plain->apply(
         action_for(plain->legal_actions(), CardId{1}, PlayMode::Lead)));

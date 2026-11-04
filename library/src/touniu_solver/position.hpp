@@ -61,9 +61,10 @@ public:
         const Action& left,
         const Action& right) const -> bool;
 
-    // Lower-bound quick tricks for the side that is about to lead: in a
-    // no-trump position with no live NoTrump-suit or joker card, each suit
-    // whose highest live card is in the leader's hand is a sure trick.
+    // Lower-bound quick tricks for the side that is about to lead in a
+    // no-trump position: an unbeatable plain top held by either partner, plus
+    // the leader's highest trump, when the opponents must follow and cannot
+    // ruff.
     struct SureTricks {
         bool north_south = false;
         std::uint32_t tricks = 0;
@@ -151,6 +152,9 @@ private:
     std::array<std::uint64_t, 5> live_mask_{};
     // Per-seat holdings over the same bit buckets: four suits plus trumps.
     std::array<std::array<std::uint64_t, 5>, 4> holdings_{};
+    // Block cards still in hand, tracked because a block can force the
+    // partner to pass on a trick it would otherwise win.
+    std::array<std::uint32_t, 4> block_cards_{};
     std::vector<UndoRecord> undo_stack_;
 };
 

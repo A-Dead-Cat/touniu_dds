@@ -753,6 +753,75 @@ TEST(SearchTest, DeterministicOrderingKeepsCanonicalBestAction)
     }
 }
 
+auto special_pool() -> std::vector<Card>
+{
+    std::vector<Card> pool;
+    std::uint64_t id = 1;
+    const std::array<Suit, 4> suits = {
+        Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs};
+    for (const Suit suit : suits) {
+        for (int rank = 12; rank <= 14; ++rank) {
+            pool.push_back(Card::normal(CardId{id++}, suit, Rank::integer(rank)));
+        }
+        pool.push_back(Card::floating(
+            CardId{id++}, suit, *Rank::floating(13'250'000 + 0)));
+    }
+    pool.push_back(Card::block(CardId{id++}, Suit::Spades));
+    pool.push_back(Card::block(CardId{id++}, Suit::Hearts));
+    pool.push_back(Card::reverse(CardId{id++}, Suit::Spades));
+    pool.push_back(Card::plus_two(CardId{id++}, Suit::Spades));
+    pool.push_back(Card::cherry_bomb(CardId{id++}, Suit::Spades));
+    pool.push_back(Card::three_suit_cat(CardId{id++}));
+    pool.push_back(Card::big_joker(CardId{id++}));
+    pool.push_back(Card::small_joker(CardId{id++}));
+    pool.push_back(Card::no_trump(CardId{id++}, Rank::integer(16)));
+    return pool;
+}
+
+TEST(SearchTest, LeaderSureTricksNeverExceedsTheOracleOnSpecialDeals)
+{
+    const std::vector<Card> pool = special_pool();
+    int checked = 0;
+    for (std::uint32_t seed = 1; seed <= 120; ++seed) {
+        std::vector<Card> shuffled = pool;
+        std::uint32_t state = seed * 2654435761U + 1U;
+        for (std::size_t index = shuffled.size(); index > 1; --index) {
+            state ^= state << 13U;
+            state ^= state >> 17U;
+            state ^= state << 5U;
+            const std::size_t other = state % index;
+            std::swap(shuffled[index - 1], shuffled[other]);
+        }
+        Scenario scenario;
+        scenario.contract = Contract::NoTrump;
+        scenario.next_player = static_cast<Seat>(seed % 4U);
+        const std::size_t per_hand = seed % 2U == 0U ? 3U : 2U;
+        scenario.tricks_remaining = static_cast<std::uint32_t>(per_hand);
+        scenario.seed = 1234U + seed;
+        for (std::size_t slot = 0; slot < 4U * per_hand; ++slot) {
+            scenario.hands[slot % 4].push_back(shuffled[slot]);
+        }
+        auto position = Position::create(scenario);
+        ASSERT_TRUE(position.has_value());
+        const Position::SureTricks sure = position->leader_sure_tricks();
+        if (sure.tricks == 0U) {
+            continue;
+        }
+        ++checked;
+        const Partnership target = target_of(position->next_player());
+        const int total = oracle(*position, target);
+        EXPECT_LE(
+            score_of(*position, target) + static_cast<int>(sure.tricks), total)
+            << "seed " << seed;
+        if (sure.north_south) {
+            EXPECT_EQ(target, Partnership::NorthSouth);
+        } else {
+            EXPECT_EQ(target, Partnership::EastWest);
+        }
+    }
+    EXPECT_GT(checked, 30);
+}
+
 TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
 {
     check_seeded_deals(SearchOptions{true, true, nullptr, false});

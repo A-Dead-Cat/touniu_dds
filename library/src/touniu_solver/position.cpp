@@ -321,6 +321,10 @@ void Position::update_holdings(
     }
     std::array<std::uint64_t, 5>& target = holdings_[seat_index(seat)];
     const Card* definition = state_.card(id);
+    if (definition != nullptr && definition->kind() == CardKind::Block) {
+        std::uint32_t& blocks = block_cards_[seat_index(seat)];
+        blocks = set ? blocks + 1U : blocks - 1U;
+    }
     // A four-suit or three-flower card is never obliged to follow a suit, so
     // only single-suit cards count toward "must follow".
     const bool real_suit_cards = definition != nullptr &&
@@ -345,6 +349,7 @@ void Position::rebuild_universe()
     universe_ = EquivalenceUniverse{};
     live_mask_ = {};
     holdings_ = {};
+    block_cards_ = {};
 
     std::size_t plus_two_count = 0;
     for (int seat = 0; seat < 4; ++seat) {
@@ -384,8 +389,13 @@ void Position::rebuild_universe()
 
     std::array<std::vector<std::pair<std::int32_t, std::uint64_t>>, 4> entries;
     std::vector<std::pair<std::int32_t, std::uint64_t>> trump_entries;
-    const auto add_capable = [&entries, &trump_entries](const Card& card) {
-        const auto rank = card.rank().millionths();
+    const auto add_capable = [this, &entries, &trump_entries](const Card& card) {
+        // A three-flower cat ranks below every real card in no-trump, so the
+        // universe must compare it with the rank trick resolution uses.
+        const auto rank =
+            state_.contract() == Contract::NoTrump &&
+                card.kind() == CardKind::ThreeSuitCat
+            ? 999'999 : card.rank().millionths();
         const std::uint64_t id = card.id().value;
         if (is_plain_single_suit(card)) {
             entries[suit_index(card.intrinsic_suits().front())].push_back({rank, id});
@@ -586,94 +596,120 @@ auto Position::leader_sure_tricks() const -> SureTricks
     }
     const Seat leader = state_.next_player();
     result.north_south = leader == Seat::North || leader == Seat::South;
+    const auto leader_index = seat_index(leader);
+    const auto partner = static_cast<Seat>(
+        (static_cast<int>(leader) + 2) % 4);
+    const auto partner_index = seat_index(partner);
     const std::array<std::uint64_t, 5>& leader_holding =
-        holdings_[seat_index(leader)];
+        holdings_[leader_index];
+    const std::array<std::uint64_t, 5>& partner_holding =
+        holdings_[partner_index];
 
-    std::uint32_t count = 0;
-    bool trump_outside_leader = false;
-    // Trump-like cards: the highest live one is a sure trick when the leader
-    // holds it, because every other trump has a lower rank and a led trump
-    // cannot be beaten by an ordinary card. Lower trumps outside the leader's
-    // hand still invalidate ordinary top cards, since they can ruff or take
-    // over the lead.
-    const std::uint64_t live_trumps = live_mask_[4];
-    if (live_trumps != 0) {
-        const int top_bit = 63 - std::countl_zero(live_trumps);
-        for (int bit = 0; bit <= top_bit; ++bit) {
-            if (((live_trumps >> bit) & 1U) == 0U) {
-                continue;
-            }
-            const std::uint64_t trump_bit =
-                std::uint64_t{1} << static_cast<std::uint8_t>(bit);
-            if ((leader_holding[4] & trump_bit) != 0) {
-                if (bit == top_bit) {
-                    ++count;
-                }
-            } else {
-                trump_outside_leader = true;
-            }
+    // A block card played by an opponent in the led suit forces the next seat
+    // to pass, which can rob the partner of the card that would win the trick.
+    // Leader-held tops are led first and cannot be affected, so only partner
+    // tops are withdrawn when an opponent still holds a block card.
+    bool opponent_block = false;
+    for (std::size_t seat = 0; seat < 4; ++seat) {
+        if (seat == leader_index || seat == partner_index) {
+            continue;
+        }
+        if (block_cards_[seat] != 0U) {
+            opponent_block = true;
         }
     }
-    if (trump_outside_leader) {
-        const auto partner = static_cast<Seat>(
-            (static_cast<int>(leader) + 2) % 4);
-        const std::array<std::uint64_t, 5>& partner_holding =
-            holdings_[seat_index(partner)];
-        const std::size_t partner_trumps =
-            std::popcount(partner_holding[4]);
-        const bool partner_has_non_trump =
-            state_.hand(partner).size() > partner_trumps;
-        // A top card is still sure when every opponent must follow suit (they
-        // cannot ruff) and the partner can follow or discard a non-trump.
-        for (std::size_t suit = 0; suit < 4; ++suit) {
-            const std::uint64_t live = live_mask_[suit];
-            if (live == 0) {
-                continue;
-            }
-            const int bit = 63 - std::countl_zero(live);
-            const std::uint64_t id =
-                universe_.ids[suit][static_cast<std::size_t>(bit)];
-            const Card* card = state_.card(CardId{id});
-            if (card == nullptr || !is_plain_single_suit(*card) ||
-                (leader_holding[suit] & (std::uint64_t{1} << bit)) == 0) {
-                continue;
-            }
-            bool safe = partner_holding[suit] != 0 ||
-                        partner_holding[4] == 0 || partner_has_non_trump;
-            for (int seat = 0; seat < 4 && safe; ++seat) {
-                const Seat other = static_cast<Seat>(seat);
-                if (other == leader || other == partner) {
-                    continue;
-                }
-                const std::array<std::uint64_t, 5>& holding =
-                    holdings_[seat_index(other)];
-                if (holding[suit] == 0 && holding[4] != 0) {
-                    safe = false;
-                }
-            }
-            if (safe) {
-                ++count;
-            }
-        }
-        result.tricks = std::min(count, state_.tricks_remaining());
-        return result;
-    }
-    // No trump outside the leader's hand: every top card is safe.
+
+    // The leader cashes its own tops and keeps the lead for the trump, then
+    // the partner wins the first of its tops and leads the remaining ones.
+    std::uint32_t leader_tops = 0;
+    std::uint32_t partner_tops = 0;
     for (std::size_t suit = 0; suit < 4; ++suit) {
         const std::uint64_t live = live_mask_[suit];
         if (live == 0) {
             continue;
         }
         const int bit = 63 - std::countl_zero(live);
-        const std::uint64_t id = universe_.ids[suit][static_cast<std::size_t>(bit)];
+        const std::uint64_t mask = std::uint64_t{1} << bit;
+        const std::uint64_t id =
+            universe_.ids[suit][static_cast<std::size_t>(bit)];
         const Card* card = state_.card(CardId{id});
-        if (card == nullptr || !is_plain_single_suit(*card) ||
-            (leader_holding[suit] & (std::uint64_t{1} << bit)) == 0) {
+        if (card == nullptr || !is_plain_single_suit(*card)) {
             continue;
         }
-        ++count;
+        const bool leader_top = (leader_holding[suit] & mask) != 0;
+        const bool partner_top = (partner_holding[suit] & mask) != 0;
+        if (!leader_top && !partner_top) {
+            continue;
+        }
+        // Whoever leads the suit must hold a real card of it.
+        if (leader_holding[suit] == 0) {
+            continue;
+        }
+        // An opponent who holds a real card of the suit must follow and cannot
+        // ruff; one without the suit can only beat the lead with a trump.
+        bool no_ruff = true;
+        bool all_follow = true;
+        for (std::size_t seat = 0; seat < 4; ++seat) {
+            if (seat == leader_index || seat == partner_index) {
+                continue;
+            }
+            if (holdings_[seat][suit] == 0) {
+                all_follow = false;
+                if (holdings_[seat][4] != 0) {
+                    no_ruff = false;
+                }
+            }
+        }
+        if (!no_ruff) {
+            continue;
+        }
+        if (leader_top) {
+            // The leader plays first, so an equal rank still wins.
+            ++leader_tops;
+        } else if (all_follow && !opponent_block) {
+            // The partner plays after the opponents, so the top must be
+            // strictly above every other live card of the suit.
+            const std::uint64_t below = live & ~mask;
+            bool strict = true;
+            if (below != 0) {
+                const std::size_t next_bit =
+                    static_cast<std::size_t>(63 - std::countl_zero(below));
+                strict = universe_.ranks[suit][next_bit].first !=
+                    universe_.ranks[suit][static_cast<std::size_t>(bit)].first;
+            }
+            if (strict) {
+                ++partner_tops;
+            }
+        }
     }
-    result.tricks = std::min(count, state_.tricks_remaining());
+
+    // The leader's highest trump wins any trump lead: no higher trump is live
+    // and no ordinary or three-flower card can beat a led trump.
+    std::uint32_t trump_trick = 0;
+    const std::uint64_t live_trumps = live_mask_[4];
+    if (live_trumps != 0 &&
+        (leader_holding[4] &
+         (std::uint64_t{1} << (63 - std::countl_zero(live_trumps)))) != 0) {
+        trump_trick = 1;
+    }
+
+    // The partner keeps its own tops for later tricks; every other counted
+    // trick must be covered by one of its spare cards, because a forced
+    // discard could otherwise throw a needed top away.
+    const std::uint32_t partner_cards =
+        static_cast<std::uint32_t>(state_.hand(partner).size());
+    const std::uint32_t partner_other_plays = leader_tops + trump_trick;
+    std::uint32_t counted_partner_tops = 0;
+    if (partner_cards >= partner_other_plays) {
+        counted_partner_tops = std::min(
+            partner_tops, partner_cards - partner_other_plays);
+    }
+    // The leader plays one card on every counted trick.
+    std::uint32_t count = leader_tops + counted_partner_tops + trump_trick;
+    count = std::min(
+        count, static_cast<std::uint32_t>(state_.hand(leader).size()));
+    count = std::min(count, state_.tricks_remaining());
+    result.tricks = count;
     return result;
 }
 
