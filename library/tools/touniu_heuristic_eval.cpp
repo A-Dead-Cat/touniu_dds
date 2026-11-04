@@ -482,6 +482,26 @@ auto full_info_lead(const Position& position, const ActionList& legal) -> Action
     return best != nullptr ? *best : legal.front();
 }
 
+// A cherry bomb that wins a trick hands it to the seat after the thrower, so it
+// only pays when that seat is the partner. Discarding one has no effect, so a
+// bomb is a liability to dump rather than a card to win with.
+auto bomb_pays(const Position& position, const Seat mover) -> bool
+{
+    const int step = position.direction() == Direction::Forward ? 1 : 3;
+    const Seat next = static_cast<Seat>((static_cast<int>(mover) + step) % 4);
+    return next == partner_of(mover);
+}
+
+auto is_bomb(const Card* card) -> bool
+{
+    return card != nullptr && card->kind() == CardKind::CherryBomb;
+}
+
+auto is_plus_two(const Card* card) -> bool
+{
+    return card != nullptr && card->kind() == CardKind::PlusTwo;
+}
+
 auto heuristic_action(
     const Position& position,
     const int lead_rule,
@@ -635,10 +655,15 @@ auto heuristic_action(
         winner == nullptr ? nullptr : card_of(position, *winner->action.card_id());
 
     // Cheapest card that beats the current winner; lowest card otherwise.
+    const bool bomb_is_good = bomb_pays(position, me);
     const Action* cheapest_winner = nullptr;
     const Card* cheapest_winner_card = nullptr;
+    const Action* plus_two_winner = nullptr;
+    const Card* plus_two_winner_card = nullptr;
     const Action* lowest = nullptr;
     const Card* lowest_card = nullptr;
+    const Action* lowest_bomb = nullptr;
+    const Card* lowest_bomb_card = nullptr;
     for (const Action& action : legal) {
         const Card* card = card_for(action);
         if (card == nullptr) continue;
@@ -646,19 +671,47 @@ auto heuristic_action(
             lowest_card = card;
             lowest = &action;
         }
-        if (winning_card != nullptr && beats(*card, *winning_card) &&
-            (cheapest_winner_card == nullptr || card->rank() < cheapest_winner_card->rank())) {
+        if (is_bomb(card) &&
+            (lowest_bomb_card == nullptr || card->rank() < lowest_bomb_card->rank())) {
+            lowest_bomb_card = card;
+            lowest_bomb = &action;
+        }
+        if (winning_card == nullptr || !beats(*card, *winning_card)) continue;
+        // A bomb only wins for us when the trick goes to the partner, and a +2
+        // hands the next seat two cards, so both are kept as a last resort.
+        if (is_bomb(card)) {
+            if (bomb_is_good &&
+                (cheapest_winner_card == nullptr ||
+                 card->rank() < cheapest_winner_card->rank())) {
+                cheapest_winner_card = card;
+                cheapest_winner = &action;
+            }
+        } else if (is_plus_two(card)) {
+            if (plus_two_winner_card == nullptr ||
+                card->rank() < plus_two_winner_card->rank()) {
+                plus_two_winner_card = card;
+                plus_two_winner = &action;
+            }
+        } else if (cheapest_winner_card == nullptr ||
+                   card->rank() < cheapest_winner_card->rank()) {
             cheapest_winner_card = card;
             cheapest_winner = &action;
         }
     }
 
     if (partner_winning) {
+        // Dump a bomb while the partner is taking the trick: it is harmless as
+        // a discard and stops being a liability later.
+        if (lowest_bomb != nullptr) return *lowest_bomb;
         return lowest != nullptr ? *lowest : legal.front();
     }
     if (cheapest_winner != nullptr) {
         return *cheapest_winner;
     }
+    if (plus_two_winner != nullptr) {
+        return *plus_two_winner;
+    }
+    if (lowest_bomb != nullptr) return *lowest_bomb;
     return lowest != nullptr ? *lowest : legal.front();
 }
 
