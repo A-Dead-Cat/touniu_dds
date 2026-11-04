@@ -140,6 +140,15 @@ private:
         std::vector<UniverseCard> cards;
         std::vector<std::uint64_t> predicted_ids;
         std::vector<std::uint64_t> trump_cards;
+        // Rank of each trump-bucket bit, in bit order.
+        std::vector<std::int32_t> trump_ranks;
+        // Bucket-4 bits whose card is a joker or a NoTrump-kind card. Those are
+        // trump in every contract; NoTrump-suit specials are trump only in a
+        // no-trump contract, so they stay out of this mask.
+        std::uint64_t nt_trump_mask = 0;
+        // Bucket-4 bits whose card is a joker. Those are trump in every
+        // contract, unlike NoTrump-kind cards, which are trump only in no-trump.
+        std::uint64_t joker_mask = 0;
         bool trump_overflow = false;
     };
     void rebuild_universe();
@@ -163,6 +172,9 @@ private:
     // Block cards still in hand, tracked because a block can force the
     // partner to pass on a trick it would otherwise win.
     std::array<std::uint32_t, 4> block_cards_{};
+    // Four-suit and three-flower cards still in hand. They can be played as any
+    // suit, so in a suit contract they can ruff a plain lead.
+    std::array<std::uint32_t, 4> multi_suit_cards_{};
     // True when the deal universe is only ordinary single-suit cards, which is
     // what makes the rank-compressed table key sound.
     bool shareable_identity_ = false;

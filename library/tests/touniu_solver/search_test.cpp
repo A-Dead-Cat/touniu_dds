@@ -782,7 +782,7 @@ TEST(SearchTest, LeaderSureTricksNeverExceedsTheOracleOnSpecialDeals)
 {
     const std::vector<Card> pool = special_pool();
     int checked = 0;
-    for (std::uint32_t seed = 1; seed <= 120; ++seed) {
+    for (std::uint32_t seed = 1; seed <= 240; ++seed) {
         std::vector<Card> shuffled = pool;
         std::uint32_t state = seed * 2654435761U + 1U;
         for (std::size_t index = shuffled.size(); index > 1; --index) {
@@ -793,7 +793,6 @@ TEST(SearchTest, LeaderSureTricksNeverExceedsTheOracleOnSpecialDeals)
             std::swap(shuffled[index - 1], shuffled[other]);
         }
         Scenario scenario;
-        scenario.contract = Contract::NoTrump;
         scenario.next_player = static_cast<Seat>(seed % 4U);
         const std::size_t per_hand = seed % 2U == 0U ? 3U : 2U;
         scenario.tricks_remaining = static_cast<std::uint32_t>(per_hand);
@@ -801,22 +800,29 @@ TEST(SearchTest, LeaderSureTricksNeverExceedsTheOracleOnSpecialDeals)
         for (std::size_t slot = 0; slot < 4U * per_hand; ++slot) {
             scenario.hands[slot % 4].push_back(shuffled[slot]);
         }
-        auto position = Position::create(scenario);
-        ASSERT_TRUE(position.has_value());
-        const Position::SureTricks sure = position->leader_sure_tricks();
-        if (sure.tricks == 0U) {
-            continue;
-        }
-        ++checked;
-        const Partnership target = target_of(position->next_player());
-        const int total = oracle(*position, target);
-        EXPECT_LE(
-            score_of(*position, target) + static_cast<int>(sure.tricks), total)
-            << "seed " << seed;
-        if (sure.north_south) {
-            EXPECT_EQ(target, Partnership::NorthSouth);
-        } else {
-            EXPECT_EQ(target, Partnership::EastWest);
+        const std::array<Contract, 4> contracts = {
+            Contract::NoTrump, Contract::Spades, Contract::Hearts,
+            Contract::Clubs};
+        for (const Contract contract : contracts) {
+            scenario.contract = contract;
+            auto position = Position::create(scenario);
+            ASSERT_TRUE(position.has_value());
+            const Position::SureTricks sure = position->leader_sure_tricks();
+            if (sure.tricks == 0U) {
+                continue;
+            }
+            ++checked;
+            const Partnership target = target_of(position->next_player());
+            const int total = oracle(*position, target);
+            EXPECT_LE(
+                score_of(*position, target) + static_cast<int>(sure.tricks),
+                total) << "seed " << seed << " contract "
+                << static_cast<int>(contract);
+            if (sure.north_south) {
+                EXPECT_EQ(target, Partnership::NorthSouth);
+            } else {
+                EXPECT_EQ(target, Partnership::EastWest);
+            }
         }
     }
     EXPECT_GT(checked, 30);
@@ -840,7 +846,7 @@ auto plain_deal(const std::uint32_t seed, const int per_hand) -> Scenario
         std::swap(deck[index - 1], deck[state % index]);
     }
     Scenario scenario;
-    scenario.contract = Contract::NoTrump;
+    scenario.contract = static_cast<Contract>(seed % 5U);
     scenario.next_player = Seat::West;
     scenario.tricks_remaining = static_cast<std::uint32_t>(per_hand);
     for (int slot = 0; slot < 4 * per_hand; ++slot) {

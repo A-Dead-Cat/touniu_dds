@@ -325,6 +325,12 @@ void Position::update_holdings(
         std::uint32_t& blocks = block_cards_[seat_index(seat)];
         blocks = set ? blocks + 1U : blocks - 1U;
     }
+    if (definition != nullptr &&
+        (definition->kind() == CardKind::ThreeSuitCat ||
+         definition->intrinsic_suits().size() == 4U)) {
+        std::uint32_t& multi = multi_suit_cards_[seat_index(seat)];
+        multi = set ? multi + 1U : multi - 1U;
+    }
     // A four-suit or three-flower card is never obliged to follow a suit, so
     // only single-suit cards count toward "must follow".
     const bool real_suit_cards = definition != nullptr &&
@@ -352,6 +358,7 @@ void Position::rebuild_universe()
     live_mask_ = {};
     holdings_ = {};
     block_cards_ = {};
+    multi_suit_cards_ = {};
     for (auto& bucket : owner_of_) {
         bucket.fill(0xFFU);
     }
@@ -506,8 +513,10 @@ void Position::rebuild_universe()
         universe_.trump_overflow = true;
     } else {
         universe_.trump_cards.resize(trump_entries.size());
+        universe_.trump_ranks.resize(trump_entries.size());
         for (std::size_t index = 0; index < trump_entries.size(); ++index) {
             universe_.trump_cards[index] = trump_entries[index].second;
+            universe_.trump_ranks[index] = trump_entries[index].first;
             {
                 UniverseCard entry;
                 entry.id = trump_entries[index].second;
@@ -525,6 +534,20 @@ void Position::rebuild_universe()
             UniverseCard* card = universe_card(trump_entries[index].second);
             if (card != nullptr) {
                 card->trump_bit = static_cast<std::uint8_t>(index);
+                const Card* definition =
+                    state_.card(CardId{trump_entries[index].second});
+                if (definition != nullptr &&
+                    (definition->kind() == CardKind::BigJoker ||
+                     definition->kind() == CardKind::SmallJoker)) {
+                    universe_.joker_mask |=
+                        std::uint64_t{1} << static_cast<std::uint8_t>(index);
+                    universe_.nt_trump_mask |=
+                        std::uint64_t{1} << static_cast<std::uint8_t>(index);
+                } else if (definition != nullptr &&
+                           definition->kind() == CardKind::NoTrump) {
+                    universe_.nt_trump_mask |=
+                        std::uint64_t{1} << static_cast<std::uint8_t>(index);
+                }
             }
             universe_.masks[4] |= std::uint64_t{1} << static_cast<std::uint8_t>(index);
         }
@@ -612,11 +635,13 @@ void Position::prune_reached_predictions()
 auto Position::leader_sure_tricks() const -> SureTricks
 {
     SureTricks result;
-    if (state_.contract() != Contract::NoTrump || !current_trick_.empty() ||
-        pending_block_.has_value() || !universe_.enabled ||
-        universe_.trump_overflow) {
+    if (!current_trick_.empty() || pending_block_.has_value() ||
+        !universe_.enabled || universe_.trump_overflow) {
         return result;
     }
+    const bool no_trump = state_.contract() == Contract::NoTrump;
+    const std::size_t contract_trump = suit_index(
+        static_cast<Suit>(static_cast<int>(state_.contract())));
     const Seat leader = state_.next_player();
     result.north_south = leader == Seat::North || leader == Seat::South;
     const auto leader_index = seat_index(leader);
@@ -627,6 +652,21 @@ auto Position::leader_sure_tricks() const -> SureTricks
         holdings_[leader_index];
     const std::array<std::uint64_t, 5>& partner_holding =
         holdings_[partner_index];
+    const auto top_bit = [](const std::uint64_t live) {
+        return std::uint64_t{1} <<
+            static_cast<std::uint8_t>(63 - std::countl_zero(live));
+    };
+
+    // An opponent who cannot follow the led suit can only take the trick with
+    // a trump card. In no-trump only the trump bucket carries those; in a suit
+    // contract the trump suit and multi-suit cards do too.
+    const auto can_ruff = [&](const std::size_t seat) {
+        if (no_trump) {
+            return holdings_[seat][4] != 0;
+        }
+        return holdings_[seat][contract_trump] != 0 ||
+            holdings_[seat][4] != 0 || multi_suit_cards_[seat] != 0;
+    };
 
     // A block card played by an opponent in the led suit forces the next seat
     // to pass, which can rob the partner of the card that would win the trick.
@@ -647,6 +687,11 @@ auto Position::leader_sure_tricks() const -> SureTricks
     std::uint32_t leader_tops = 0;
     std::uint32_t partner_tops = 0;
     for (std::size_t suit = 0; suit < 4; ++suit) {
+        // A trump-suit top is cashed as the trump trick below, where it is
+        // compared with the jokers.
+        if (!no_trump && suit == contract_trump) {
+            continue;
+        }
         const std::uint64_t live = live_mask_[suit];
         if (live == 0) {
             continue;
@@ -668,8 +713,6 @@ auto Position::leader_sure_tricks() const -> SureTricks
         if (leader_holding[suit] == 0) {
             continue;
         }
-        // An opponent who holds a real card of the suit must follow and cannot
-        // ruff; one without the suit can only beat the lead with a trump.
         bool no_ruff = true;
         bool all_follow = true;
         for (std::size_t seat = 0; seat < 4; ++seat) {
@@ -678,7 +721,7 @@ auto Position::leader_sure_tricks() const -> SureTricks
             }
             if (holdings_[seat][suit] == 0) {
                 all_follow = false;
-                if (holdings_[seat][4] != 0) {
+                if (can_ruff(seat)) {
                     no_ruff = false;
                 }
             }
@@ -706,14 +749,71 @@ auto Position::leader_sure_tricks() const -> SureTricks
         }
     }
 
-    // The leader's highest trump wins any trump lead: no higher trump is live
-    // and no ordinary or three-flower card can beat a led trump.
+    // The leader's highest trump wins any trump lead. In a suit contract the
+    // jokers and NoTrump-kind cards outrank the trump suit, while NoTrump-suit
+    // specials are not trump there at all.
     std::uint32_t trump_trick = 0;
-    const std::uint64_t live_trumps = live_mask_[4];
-    if (live_trumps != 0 &&
-        (leader_holding[4] &
-         (std::uint64_t{1} << (63 - std::countl_zero(live_trumps)))) != 0) {
-        trump_trick = 1;
+    if (no_trump) {
+        const std::uint64_t live_trumps = live_mask_[4];
+        if (live_trumps != 0 &&
+            (leader_holding[4] & top_bit(live_trumps)) != 0) {
+            trump_trick = 1;
+        }
+    } else {
+        // The highest trump-capable card is the better of the highest
+        // joker/NoTrump-kind card and the highest card of the trump suit.
+        std::uint64_t best_mask = 0;
+        std::size_t best_bucket = 0;
+        std::int32_t best_rank = -1;
+        const std::uint64_t jokers = live_mask_[4] & universe_.joker_mask;
+        if (jokers != 0) {
+            const std::size_t bit =
+                static_cast<std::size_t>(63 - std::countl_zero(jokers));
+            best_rank = universe_.trump_ranks[bit];
+            best_mask = std::uint64_t{1} << static_cast<std::uint8_t>(bit);
+            best_bucket = 4;
+        }
+        const std::uint64_t trumps = live_mask_[contract_trump];
+        if (trumps != 0) {
+            const std::size_t bit =
+                static_cast<std::size_t>(63 - std::countl_zero(trumps));
+            const std::int32_t rank =
+                universe_.ranks[contract_trump][bit].first;
+            // Only an ordinary single-suit card wins a trump lead: a cherry
+            // bomb hands the trick to the next seat, and a cat or four-suit
+            // card cannot be led as the trump suit.
+            const Card* top = state_.card(
+                CardId{universe_.ids[contract_trump][bit]});
+            if (top != nullptr && !is_plain_single_suit(*top)) {
+                best_rank = 16'000'000;
+            } else if (rank > best_rank) {
+                best_rank = rank;
+                best_mask = std::uint64_t{1} << static_cast<std::uint8_t>(bit);
+                best_bucket = contract_trump;
+            }
+        }
+        if (best_mask != 0 &&
+            (leader_holding[best_bucket] & best_mask) != 0) {
+            // A three-flower cat or a four-suit card can be played as the
+            // trump suit and outranks an ordinary trump, so only the top rank
+            // (jokers and NoTrump-kind cards at 16) is safe on its own.
+            if (best_bucket == 4 && best_rank >= 16'000'000) {
+                trump_trick = 1;
+            } else {
+                bool multi_suit_opponent = false;
+                for (std::size_t seat = 0; seat < 4; ++seat) {
+                    if (seat == leader_index || seat == partner_index) {
+                        continue;
+                    }
+                    if (multi_suit_cards_[seat] != 0U) {
+                        multi_suit_opponent = true;
+                    }
+                }
+                if (!multi_suit_opponent) {
+                    trump_trick = 1;
+                }
+            }
+        }
     }
 
     // The partner keeps its own tops for later tricks; every other counted

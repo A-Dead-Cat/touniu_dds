@@ -144,12 +144,20 @@ choice when a card can legally be played.
   draw. The predicate is a per-suit rank mask over the precomputed universe, so
   the check costs a few lookups instead of scanning every hand. The analysis
   root always reports every legal action.
-- At a no-trump lead the search counts sure tricks for the leader's
-  partnership. The highest live trump-like card is sure when the leader holds
-  it. A suit whose highest live card is a plain card held by either partner is
-  sure when the leader holds a real card of the suit to lead it and no opponent
-  can ruff: every opponent either holds a real card of that suit (so it must
-  follow) or holds no trump-like card. The leader cashes its own suit tops and
+- At a lead the search counts sure tricks for the leader's partnership, in
+  every contract. The highest trump-capable card is sure when the leader holds
+  it: in no-trump that is the top of the trump bucket, which holds jokers,
+  NoTrump-kind cards and NoTrump-suit specials; in a suit contract it is the
+  better of the highest joker and the highest ordinary card of the trump suit,
+  because a NoTrump-kind card is not trump there. A top card of the trump suit
+  is only counted while no opponent holds a four-suit or three-flower card,
+  since those can be played as the trump suit, and a cherry bomb never counts,
+  because it hands the trick to the next seat. A suit whose highest live card
+  is a plain card held by either partner is sure when the leader holds a real
+  card of the suit to lead it and no opponent can ruff: every opponent either
+  holds a real card of that suit (so it must follow) or holds no ruffing card
+  (trump bucket in no-trump; trump suit, trump bucket or multi-suit card in a
+  suit contract). The leader cashes its own suit tops and
   keeps the lead, then the trump; partner-held tops are cashed afterwards. A
   partner top additionally requires that it is strictly above every other live
   card of the suit (the opponents play first, so an equal rank could win by

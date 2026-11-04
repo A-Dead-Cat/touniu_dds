@@ -663,9 +663,21 @@ TEST(PositionTest, LeaderSureTricksCountsTopCardsAndTheHighestTrump)
     EXPECT_TRUE(plain_sure.north_south == false);
     EXPECT_EQ(plain_sure.tricks, 2U);
 
+    // In a spade contract the spade ace is the trump trick and the heart ace
+    // is safe because every opponent still holds a heart to follow.
     auto suit_contract = Position::create(scenario(Contract::Spades));
     ASSERT_TRUE(suit_contract.has_value());
-    EXPECT_EQ(suit_contract->leader_sure_tricks().tricks, 0U);
+    EXPECT_EQ(suit_contract->leader_sure_tricks().tricks, 2U);
+
+    // The same ace is not sure once an opponent is void and can ruff.
+    Scenario ruffed = scenario(Contract::Spades);
+    ruffed.hands[static_cast<int>(Seat::North)] = {
+        normal_card(3, Suit::Spades, 13),
+        normal_card(4, Suit::Spades, 3),
+    };
+    auto ruffed_position = Position::create(ruffed);
+    ASSERT_TRUE(ruffed_position.has_value());
+    EXPECT_EQ(ruffed_position->leader_sure_tricks().tricks, 1U);
 
     // The leader holds the highest trump; a lower trump outside means ordinary
     // top cards are not sure, but the trump itself is.
@@ -825,6 +837,45 @@ void play_single_trick(Position& position, const std::uint64_t west_lead)
     ASSERT_TRUE(position.apply(action_for(second, CardId{5}, PlayMode::Follow)));
     const std::vector<Action> third = position.legal_actions();
     ASSERT_TRUE(position.apply(action_for(third, CardId{7}, PlayMode::Follow)));
+}
+
+TEST(PositionTest, SuitContractSureTricksAccountForCatsAndTrumps)
+{
+    const auto build = [](const bool opponent_cat) {
+        Scenario deal;
+        deal.next_player = Seat::West;
+        deal.contract = Contract::Spades;
+        deal.tricks_remaining = 2;
+        deal.hands[static_cast<int>(Seat::West)] = {
+            normal_card(1, Suit::Spades, 14),
+            normal_card(2, Suit::Hearts, 9),
+        };
+        deal.hands[static_cast<int>(Seat::North)] = {
+            opponent_cat ? Card::three_suit_cat(CardId{3})
+                         : normal_card(3, Suit::Hearts, 6),
+            normal_card(4, Suit::Spades, 2),
+        };
+        deal.hands[static_cast<int>(Seat::East)] = {
+            normal_card(5, Suit::Spades, 3),
+            normal_card(6, Suit::Hearts, 3),
+        };
+        deal.hands[static_cast<int>(Seat::South)] = {
+            normal_card(7, Suit::Hearts, 4),
+            normal_card(8, Suit::Hearts, 5),
+        };
+        return deal;
+    };
+
+    auto clean = Position::create(build(false));
+    ASSERT_TRUE(clean.has_value());
+    // The heart nine is safe, and so is the spade ace.
+    EXPECT_EQ(clean->leader_sure_tricks().tricks, 2U);
+
+    // The cat can be played as either the trump suit or as hearts, so neither
+    // top card is provably safe any more.
+    auto cat = Position::create(build(true));
+    ASSERT_TRUE(cat.has_value());
+    EXPECT_EQ(cat->leader_sure_tricks().tricks, 0U);
 }
 
 TEST(PositionTest, ShareableIdentityMergesEquivalentCardsAfterATrick)
