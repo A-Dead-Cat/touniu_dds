@@ -29,6 +29,12 @@ struct SearchStats {
     std::uint64_t ordering_static = 0;
     std::uint64_t equivalent_groups = 0;
     std::uint64_t equivalent_skips = 0;
+    std::uint64_t equivalence_checks = 0;
+    std::uint64_t equivalence_merged = 0;
+    std::uint64_t equivalence_blocked_candidate = 0;
+    std::uint64_t equivalence_blocked_plus_two = 0;
+    std::uint64_t equivalence_blocked_rank = 0;
+    std::uint64_t equivalence_blocked_special = 0;
     std::uint64_t table_replacements = 0;
 };
 
@@ -43,6 +49,10 @@ struct SearchOptions {
     // Interior nodes merge plain cards that are indistinguishable for every
     // remaining comparison. The root of analyze_actions() is never merged.
     bool use_equivalent_pruning = true;
+    // Wide mode also ignores special or multi-suit cards whose rank lies
+    // strictly outside the candidate gap; narrow mode disables a pair as soon
+    // as any non-plain card remains. Kept switchable for A/B measurements.
+    bool use_wide_equivalence = true;
 };
 
 struct SearchResult {

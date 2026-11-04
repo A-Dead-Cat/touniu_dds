@@ -306,6 +306,17 @@ auto ordered_scenario(const int deal_index) -> Scenario
     return scenario;
 }
 
+auto action_for(const std::vector<Action>& actions, const CardId id, const PlayMode mode)
+    -> Action
+{
+    for (const Action& action : actions) {
+        if (action.card_id() == id && action.mode() == mode) {
+            return action;
+        }
+    }
+    return Action::pass();
+}
+
 auto lead_action(const std::uint64_t id) -> Action
 {
     return Action::play(CardId{id}, PlayMode::Lead, Suit::Spades);
@@ -368,14 +379,142 @@ TEST(SearchTest, EquivalentPredicateRejectsGapsAndMismatches)
     ASSERT_TRUE(plus_two_position.has_value());
     EXPECT_FALSE(actions_are_equivalent(*plus_two_position, lead_action(1), lead_action(2)));
 
-    // Multi-suit specials always block the merge.
+    // A special or multi-suit card whose rank sits inside the gap (or on an
+    // endpoint) still distinguishes the two candidates.
     Scenario special = equivalence_scenario();
     special.hands[1] = {
-        Card::four_suit(CardId{3}, Rank::integer(6)),
+        Card::four_suit(CardId{3}, *Rank::floating(8'500'000)),
     };
     const auto special_position = Position::create(special);
     ASSERT_TRUE(special_position.has_value());
-    EXPECT_FALSE(actions_are_equivalent(*special_position, lead_action(1), lead_action(2)));
+    EXPECT_FALSE(
+        actions_are_equivalent(*special_position, lead_action(1), lead_action(2)));
+
+    Scenario endpoint = equivalence_scenario();
+    endpoint.hands[1] = {
+        Card::four_suit(CardId{3}, Rank::integer(8)),
+    };
+    const auto endpoint_position = Position::create(endpoint);
+    ASSERT_TRUE(endpoint_position.has_value());
+    EXPECT_FALSE(
+        actions_are_equivalent(*endpoint_position, lead_action(1), lead_action(2)));
+
+    // A floating rank strictly between the candidates also blocks it.
+    Scenario floating = equivalence_scenario();
+    floating.hands[1] = {
+        Card::floating(CardId{3}, Suit::Spades, *Rank::floating(8'500'000)),
+    };
+    const auto floating_position = Position::create(floating);
+    ASSERT_TRUE(floating_position.has_value());
+    EXPECT_FALSE(
+        actions_are_equivalent(*floating_position, lead_action(1), lead_action(2)));
+}
+
+TEST(SearchTest, EquivalentPredicateAllowsSpecialsOutsideTheGap)
+{
+    // A block has rank 1, far below both candidates, so it compares the same
+    // against either one whatever suit it is played as.
+    Scenario block = equivalence_scenario();
+    block.hands[1] = {
+        Card::block(CardId{3}, Suit::Spades),
+        Card::reverse(CardId{4}, Suit::Hearts),
+    };
+    const auto block_position = Position::create(block);
+    ASSERT_TRUE(block_position.has_value());
+    EXPECT_TRUE(actions_are_equivalent(*block_position, lead_action(1), lead_action(2)));
+
+    // Multi-suit cards above the gap are equally harmless.
+    Scenario high = equivalence_scenario();
+    high.hands[1] = {
+        Card::four_suit(CardId{3}, Rank::integer(14)),
+    };
+    const auto high_position = Position::create(high);
+    ASSERT_TRUE(high_position.has_value());
+    EXPECT_TRUE(actions_are_equivalent(*high_position, lead_action(1), lead_action(2)));
+
+    // A special already in the current trick has finished resolving; only its
+    // rank matters, and a block's rank is outside the gap.
+    Scenario trick = equivalence_scenario();
+    trick.hands[0] = {Card::block(CardId{1}, Suit::Spades)};
+    trick.hands[1] = {};
+    trick.hands[2] = {
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(9)),
+        Card::normal(CardId{3}, Suit::Spades, Rank::integer(8)),
+    };
+    trick.hands[3] = {Card::normal(CardId{4}, Suit::Hearts, Rank::integer(5))};
+    auto trick_position = Position::create(trick);
+    ASSERT_TRUE(trick_position.has_value());
+    const Action block_lead = action_for(
+        trick_position->legal_actions(), CardId{1}, PlayMode::Lead);
+    ASSERT_FALSE(block_lead.is_pass());
+    ASSERT_TRUE(trick_position->apply(block_lead));
+    // North is forced to pass by the block, so East is next to act.
+    const Action forced_pass = trick_position->legal_actions().front();
+    ASSERT_TRUE(forced_pass.is_pass());
+    ASSERT_TRUE(trick_position->apply(forced_pass));
+    const Action nine =
+        action_for(trick_position->legal_actions(), CardId{2}, PlayMode::Follow);
+    const Action eight =
+        action_for(trick_position->legal_actions(), CardId{3}, PlayMode::Follow);
+    ASSERT_FALSE(nine.is_pass());
+    ASSERT_FALSE(eight.is_pass());
+    EXPECT_TRUE(actions_are_equivalent(*trick_position, nine, eight));
+}
+
+TEST(SearchTest, WideEquivalenceKeepsSpecialDeckValuesExact)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[0] = {
+        Card::block(CardId{1}, Suit::Spades),
+        Card::normal(CardId{2}, Suit::Spades, Rank::integer(14)),
+    };
+    scenario.hands[1] = {
+        Card::four_suit(CardId{3}, Rank::integer(6)),
+        Card::normal(CardId{4}, Suit::Hearts, Rank::integer(13)),
+    };
+    scenario.hands[2] = {
+        Card::reverse(CardId{5}, Suit::Spades),
+        Card::normal(CardId{6}, Suit::Spades, Rank::integer(12)),
+    };
+    scenario.hands[3] = {
+        Card::normal(CardId{7}, Suit::Spades, Rank::integer(13)),
+        Card::plus_two(CardId{8}, Suit::Hearts),
+    };
+
+    auto wide = *Position::create(scenario);
+    auto narrow = *Position::create(scenario);
+    SearchStats wide_stats;
+    SearchStats narrow_stats;
+    SearchOptions wide_options{true, true, &wide_stats};
+    SearchOptions narrow_options{true, true, &narrow_stats};
+    narrow_options.use_wide_equivalence = false;
+
+    const std::vector<ActionAnalysis> wide_actions =
+        analyze_actions(wide, Partnership::NorthSouth, wide_options);
+    auto reference = *Position::create(scenario);
+    const std::vector<ActionAnalysis> narrow_actions =
+        analyze_actions(reference, Partnership::NorthSouth, narrow_options);
+
+    ASSERT_EQ(wide_actions.size(), narrow_actions.size());
+    for (std::size_t index = 0; index < wide_actions.size(); ++index) {
+        EXPECT_EQ(wide_actions[index].action, narrow_actions[index].action);
+        EXPECT_EQ(wide_actions[index].final_tricks, narrow_actions[index].final_tricks);
+    }
+    // Wide merging can only remove interior branches; the fixture is small,
+    // so the dedicated special-deck benchmark tracks the node delta.
+    EXPECT_LE(wide_stats.nodes, narrow_stats.nodes);
+
+    // Every displayed value must still match the TT-free oracle.
+    for (const ActionAnalysis& analysis : wide_actions) {
+        auto forced = *Position::create(scenario);
+        ASSERT_TRUE(forced.apply(analysis.action));
+        EXPECT_EQ(
+            analysis.final_tricks,
+            oracle(forced, Partnership::NorthSouth));
+    }
 }
 
 TEST(SearchTest, EquivalentPruningKeepsExactValuesAndLowersNodes)
@@ -415,6 +554,8 @@ TEST(SearchTest, EquivalentPruningKeepsExactValuesAndLowersNodes)
     EXPECT_EQ(pruned_result.tricks, plain_result.tricks);
     EXPECT_EQ(pruned_result.best_action, plain_result.best_action);
     EXPECT_GT(pruned_stats.equivalent_skips, 0U);
+    EXPECT_GT(pruned_stats.equivalence_checks, 0U);
+    EXPECT_GT(pruned_stats.equivalence_merged, 0U);
     EXPECT_LT(pruned_stats.nodes, plain_stats.nodes);
 }
 

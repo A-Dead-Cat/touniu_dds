@@ -21,6 +21,8 @@ struct Args {
     bool legacy = false;
     bool contract_table = false;
     bool batch_only = false;
+    bool special_deck = false;
+    bool narrow_equivalence = false;
 };
 
 auto parse_uint(const char* text, std::uint32_t& out) -> bool
@@ -56,6 +58,10 @@ auto parse_args(const int argc, char** argv) -> Args
             args.contract_table = true;
         } else if (flag == "--batch-only") {
             args.batch_only = true;
+        } else if (flag == "--special") {
+            args.special_deck = true;
+        } else if (flag == "--narrow-equivalence") {
+            args.narrow_equivalence = true;
         }
     }
     if (args.cards < 1) args.cards = 1;
@@ -64,19 +70,37 @@ auto parse_args(const int argc, char** argv) -> Args
     return args;
 }
 
-auto make_deck() -> std::vector<touniu_solver::Card>
+auto make_deck(const bool special) -> std::vector<touniu_solver::Card>
 {
     using namespace touniu_solver;
     const std::array<Suit, 4> suits{
         Suit::Spades, Suit::Hearts, Suit::Diamonds, Suit::Clubs};
     std::vector<Card> deck;
-    deck.reserve(52);
+    deck.reserve(special ? 80U : 52U);
     std::uint64_t id = 1;
     for (const Suit suit : suits) {
         for (int rank = 2; rank <= 14; ++rank) {
             deck.push_back(Card::normal(CardId{id}, suit, Rank::integer(rank)));
             ++id;
         }
+    }
+    if (!special) {
+        return deck;
+    }
+    for (const Suit suit : suits) {
+        deck.push_back(Card::block(CardId{id++}, suit));
+        deck.push_back(Card::reverse(CardId{id++}, suit));
+        deck.push_back(Card::plus_two(CardId{id++}, suit));
+        deck.push_back(Card::cherry_bomb(CardId{id++}, suit));
+    }
+    for (const int rank : {5, 7, 9, 11}) {
+        deck.push_back(Card::four_suit(CardId{id++}, Rank::integer(rank)));
+    }
+    deck.push_back(Card::big_joker(CardId{id++}));
+    deck.push_back(Card::small_joker(CardId{id++}));
+    deck.push_back(Card::three_suit_cat(CardId{id++}));
+    for (const int rank : {4, 6, 8, 10, 12}) {
+        deck.push_back(Card::no_trump(CardId{id++}, Rank::integer(rank)));
     }
     return deck;
 }
@@ -89,12 +113,15 @@ auto xorshift32(std::uint32_t& state) -> std::uint32_t
     return state;
 }
 
-auto build_scenario(const int cards, const std::uint32_t seed) -> touniu_solver::Scenario
+auto build_scenario(
+    const int cards,
+    const std::uint32_t seed,
+    const bool special) -> touniu_solver::Scenario
 {
     using namespace touniu_solver;
-    std::vector<Card> deck = make_deck();
+    std::vector<Card> deck = make_deck(special);
     std::uint32_t state = seed;
-    for (int index = 51; index >= 1; --index) {
+    for (int index = static_cast<int>(deck.size()) - 1; index >= 1; --index) {
         const std::uint32_t swap =
             xorshift32(state) % static_cast<std::uint32_t>(index + 1);
         std::swap(deck[static_cast<std::size_t>(index)],
@@ -173,7 +200,9 @@ int main(int argc, char** argv)
 
         for (int sample = 0; sample < args.samples; ++sample) {
             const Scenario base = build_scenario(
-                args.cards, args.seed + static_cast<std::uint32_t>(sample));
+                args.cards,
+                args.seed + static_cast<std::uint32_t>(sample),
+                args.special_deck);
             std::vector<int> values_v2;
             std::vector<int> values_batch;
             unsigned long long sample_v2 = 0;
@@ -192,9 +221,10 @@ int main(int argc, char** argv)
                         return 1;
                     }
                     SearchStats stats;
+                    SearchOptions options{true, true, &stats};
+                    options.use_wide_equivalence = !args.narrow_equivalence;
                     values_v2.push_back(
-                        solve(*position, declarer_target(declarer),
-                              SearchOptions{true, true, &stats}).tricks);
+                        solve(*position, declarer_target(declarer), options).tricks);
                     sample_v2 += stats.nodes;
                     replacements_v2 += stats.table_replacements;
                     totals_v2.nodes += stats.nodes;
@@ -224,8 +254,10 @@ int main(int argc, char** argv)
                         {std::move(*position), declarer_target(declarer)});
                 }
                 SearchStats stats;
+                SearchOptions options{true, true, &stats};
+                options.use_wide_equivalence = !args.narrow_equivalence;
                 const std::vector<int> values = solve_contract_batch(
-                    queries, SearchOptions{true, true, &stats});
+                    queries, options);
                 sample_batch += stats.nodes;
                 replacements_batch += stats.table_replacements;
                 totals_batch.nodes += stats.nodes;
@@ -315,7 +347,9 @@ int main(int argc, char** argv)
 
     for (int sample = 0; sample < args.samples; ++sample) {
         const Scenario scenario = build_scenario(
-            args.cards, args.seed + static_cast<std::uint32_t>(sample));
+            args.cards,
+            args.seed + static_cast<std::uint32_t>(sample),
+            args.special_deck);
         auto position = Position::create(scenario);
         if (!position.has_value()) {
             std::fprintf(stderr, "failed to create position\n");
@@ -323,21 +357,21 @@ int main(int argc, char** argv)
         }
 
         SearchStats stats;
+        SearchOptions options{true, true, &stats};
+        options.use_wide_equivalence = !args.narrow_equivalence;
         const auto start = std::chrono::steady_clock::now();
         std::vector<ActionAnalysis> analyses;
         if (args.legacy) {
             for (const Action& action : position->legal_actions()) {
                 if (!position->apply(action)) continue;
                 const SearchResult result = solve(
-                    *position, Partnership::NorthSouth, SearchOptions{true, true, &stats});
+                    *position, Partnership::NorthSouth, options);
                 position->undo();
                 analyses.push_back({action, result.tricks});
             }
         } else {
             analyses = analyze_actions(
-                *position,
-                Partnership::NorthSouth,
-                SearchOptions{true, true, &stats});
+                *position, Partnership::NorthSouth, options);
         }
         const auto end = std::chrono::steady_clock::now();
         const double elapsed_ms =
@@ -361,23 +395,37 @@ int main(int argc, char** argv)
         totals.pvs_researches += stats.pvs_researches;
         totals.equivalent_groups += stats.equivalent_groups;
         totals.equivalent_skips += stats.equivalent_skips;
+        totals.equivalence_checks += stats.equivalence_checks;
+        totals.equivalence_merged += stats.equivalence_merged;
+        totals.equivalence_blocked_candidate += stats.equivalence_blocked_candidate;
+        totals.equivalence_blocked_plus_two += stats.equivalence_blocked_plus_two;
+        totals.equivalence_blocked_rank += stats.equivalence_blocked_rank;
+        totals.equivalence_blocked_special += stats.equivalence_blocked_special;
         totals.table_replacements += stats.table_replacements;
     }
 
     const double average_ms = total_ms / args.samples;
     std::printf(
         "{\"cards\":%d,\"samples\":%d,\"seed\":%u,\"legacy\":%s,"
+        "\"special\":%s,\"narrow_equivalence\":%s,"
         "\"average_ms\":%.3f,\"min_ms\":%.3f,\"max_ms\":%.3f,"
         "\"nodes\":%llu,\"table_queries\":%llu,\"table_hits\":%llu,"
         "\"collision_rejections\":%llu,\"cutoffs\":%llu,"
         "\"pvs_null_windows\":%llu,\"pvs_researches\":%llu,"
         "\"equivalent_groups\":%llu,\"equivalent_skips\":%llu,"
+        "\"equivalence_checks\":%llu,\"equivalence_merged\":%llu,"
+        "\"equivalence_blocked_candidate\":%llu,"
+        "\"equivalence_blocked_plus_two\":%llu,"
+        "\"equivalence_blocked_rank\":%llu,"
+        "\"equivalence_blocked_special\":%llu,"
         "\"table_replacements\":%llu,"
         "\"samples_nodes\":[",
         args.cards,
         args.samples,
         args.seed,
         args.legacy ? "true" : "false",
+        args.special_deck ? "true" : "false",
+        args.narrow_equivalence ? "true" : "false",
         average_ms,
         minimum_ms,
         maximum_ms,
@@ -390,6 +438,12 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(totals.pvs_researches),
         static_cast<unsigned long long>(totals.equivalent_groups),
         static_cast<unsigned long long>(totals.equivalent_skips),
+        static_cast<unsigned long long>(totals.equivalence_checks),
+        static_cast<unsigned long long>(totals.equivalence_merged),
+        static_cast<unsigned long long>(totals.equivalence_blocked_candidate),
+        static_cast<unsigned long long>(totals.equivalence_blocked_plus_two),
+        static_cast<unsigned long long>(totals.equivalence_blocked_rank),
+        static_cast<unsigned long long>(totals.equivalence_blocked_special),
         static_cast<unsigned long long>(totals.table_replacements));
     for (std::size_t index = 0; index < sample_nodes.size(); ++index) {
         std::printf("%s%llu", index == 0 ? "" : ",", sample_nodes[index]);

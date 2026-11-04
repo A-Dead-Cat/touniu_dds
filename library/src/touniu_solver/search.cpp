@@ -116,6 +116,96 @@ auto rank_between(const Card& card, const Card& left, const Card& right) -> bool
     return card.rank() > left.rank() && card.rank() < right.rank();
 }
 
+enum class EquivalenceBlock {
+    None,
+    Candidate,
+    PlusTwo,
+    Rank,
+    Special,
+    NonPlain,
+};
+
+// Decides whether `right` can reuse the value already computed for `left`.
+// In wide mode a special or multi-suit universe card only blocks the pair when
+// its rank lies inside [low, high] (inclusive), because a rank strictly outside
+// the gap compares identically against both candidates whatever suit it is
+// played as. A +2 held in a hand always blocks: its future draws could land
+// between the candidates. A +2 already in the current trick has finished
+// drawing, so only its rank matters.
+auto equivalence_block(
+    const Position& position,
+    const Action& left,
+    const Action& right,
+    const bool wide) -> EquivalenceBlock
+{
+    if (left.is_pass() || right.is_pass()) {
+        return EquivalenceBlock::Candidate;
+    }
+    if (left.mode() != right.mode() ||
+        left.effective_suit() != right.effective_suit()) {
+        return EquivalenceBlock::Candidate;
+    }
+    const Card* left_card = position.card(*left.card_id());
+    const Card* right_card = position.card(*right.card_id());
+    if (left_card == nullptr || right_card == nullptr) {
+        return EquivalenceBlock::Candidate;
+    }
+    if (!is_plain_card(*left_card) || !is_plain_card(*right_card) ||
+        left_card->intrinsic_suits() != right_card->intrinsic_suits()) {
+        return EquivalenceBlock::Candidate;
+    }
+
+    const Card& low = left_card->rank() < right_card->rank()
+        ? *left_card : *right_card;
+    const Card& high = left_card->rank() < right_card->rank()
+        ? *right_card : *left_card;
+
+    const auto classify = [&](const Card& card, const bool in_hand) {
+        if (card.kind() == CardKind::PlusTwo && in_hand) {
+            return EquivalenceBlock::PlusTwo;
+        }
+        if (is_plain_card(card)) {
+            return rank_between(card, low, high)
+                ? EquivalenceBlock::Rank : EquivalenceBlock::None;
+        }
+        if (!wide) {
+            return EquivalenceBlock::NonPlain;
+        }
+        const bool inside = card.rank() >= low.rank() && card.rank() <= high.rank();
+        return inside ? EquivalenceBlock::Special : EquivalenceBlock::None;
+    };
+
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            if (id == left_card->id() || id == right_card->id()) {
+                continue;
+            }
+            const Card* card = position.card(id);
+            if (card == nullptr) {
+                return EquivalenceBlock::Candidate;
+            }
+            const EquivalenceBlock block = classify(*card, true);
+            if (block != EquivalenceBlock::None) {
+                return block;
+            }
+        }
+    }
+    for (const TrickPlay& play : position.current_trick()) {
+        if (play.action.is_pass()) {
+            continue;
+        }
+        const Card* card = position.card(*play.action.card_id());
+        if (card == nullptr) {
+            return EquivalenceBlock::Candidate;
+        }
+        const EquivalenceBlock block = classify(*card, false);
+        if (block != EquivalenceBlock::None) {
+            return block;
+        }
+    }
+    return EquivalenceBlock::None;
+}
+
 enum class Bound {
     Exact,
     Lower,
@@ -394,9 +484,39 @@ private:
             if (options_.use_equivalent_pruning) {
                 bool merged = false;
                 for (const Action& representative : representatives) {
-                    if (actions_are_equivalent(position, representative, action)) {
+                    const EquivalenceBlock block = equivalence_block(
+                        position,
+                        representative,
+                        action,
+                        options_.use_wide_equivalence);
+                    if (options_.stats != nullptr) {
+                        ++options_.stats->equivalence_checks;
+                    }
+                    if (block == EquivalenceBlock::None) {
                         merged = true;
+                        if (options_.stats != nullptr) {
+                            ++options_.stats->equivalence_merged;
+                        }
                         break;
+                    }
+                    if (options_.stats != nullptr) {
+                        switch (block) {
+                            case EquivalenceBlock::Candidate:
+                                ++options_.stats->equivalence_blocked_candidate;
+                                break;
+                            case EquivalenceBlock::PlusTwo:
+                                ++options_.stats->equivalence_blocked_plus_two;
+                                break;
+                            case EquivalenceBlock::Rank:
+                                ++options_.stats->equivalence_blocked_rank;
+                                break;
+                            case EquivalenceBlock::Special:
+                            case EquivalenceBlock::NonPlain:
+                                ++options_.stats->equivalence_blocked_special;
+                                break;
+                            case EquivalenceBlock::None:
+                                break;
+                        }
                     }
                 }
                 if (merged) {
@@ -565,58 +685,10 @@ auto actions_are_equivalent(
     const Action& left,
     const Action& right) -> bool
 {
-    if (left.is_pass() || right.is_pass()) {
-        return false;
-    }
-    if (left.mode() != right.mode() ||
-        left.effective_suit() != right.effective_suit()) {
-        return false;
-    }
-    const Card* left_card = position.card(*left.card_id());
-    const Card* right_card = position.card(*right.card_id());
-    if (left_card == nullptr || right_card == nullptr) {
-        return false;
-    }
-    if (!is_plain_card(*left_card) || !is_plain_card(*right_card) ||
-        left_card->intrinsic_suits() != right_card->intrinsic_suits()) {
-        return false;
-    }
-
-    const Card& low = left_card->rank() < right_card->rank()
-        ? *left_card : *right_card;
-    const Card& high = left_card->rank() < right_card->rank()
-        ? *right_card : *left_card;
-
-    // Any special or extra-suit card that could still be compared disables the
-    // merge, as does a +2 whose future draws could land between the ranks.
-    for (int seat = 0; seat < 4; ++seat) {
-        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
-            if (id == left_card->id() || id == right_card->id()) {
-                continue;
-            }
-            const Card* card = position.card(id);
-            if (card == nullptr || !is_plain_card(*card)) {
-                return false;
-            }
-            if (rank_between(*card, low, high)) {
-                return false;
-            }
-        }
-    }
-    for (const TrickPlay& play : position.current_trick()) {
-        if (play.action.is_pass()) {
-            continue;
-        }
-        const Card* card = position.card(*play.action.card_id());
-        if (card == nullptr || !is_plain_card(*card)) {
-            return false;
-        }
-        if (rank_between(*card, low, high)) {
-            return false;
-        }
-    }
-    return true;
+    return equivalence_block(position, left, right, true) ==
+           EquivalenceBlock::None;
 }
+
 
 auto solve(Position& position, Partnership target, bool use_alpha_beta)
     -> SearchResult
