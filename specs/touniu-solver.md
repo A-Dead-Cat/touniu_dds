@@ -134,7 +134,14 @@ choice when a card can legally be played.
   the walk off for A/B runs.
 - Interior nodes use PVS over a deterministic move order (table best action,
   then the ply's main-variation action, then the two killers, then the canonical
-  legal order). Per-action analysis converges with MTD(f) null-window probes.
+  legal order). The remaining actions are sorted by a static score when the deal
+  is plain: a card that takes the trick comes first, cheapest winner before more
+  expensive ones, then losing cards lowest first, and a lead is ordered highest
+  card first. Scores are computed once per node and applied with a stable
+  insertion sort, so equal scores keep the canonical order and an equal-valued
+  tie still reports the earliest canonical action. Special decks keep the
+  canonical order because the score ignores card effects and measurably hurts
+  them. Per-action analysis converges with MTD(f) null-window probes.
   Ordering, history and bounds never change which legal actions exist, and an
   equal-valued tie still resolves to the earliest canonical action.
 - Each position precomputes the deal universe: the live cards (hands and the

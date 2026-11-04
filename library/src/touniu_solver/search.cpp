@@ -552,7 +552,7 @@ private:
         const std::uint32_t depth = search_depth(position);
         ActionList& actions = buffer(position);
         position.legal_actions_into(actions);
-        order_actions(actions, depth, cached);
+        order_actions(position, actions, depth, cached);
 
         ActionList& representatives = merge_buffers_[depth];
         representatives.clear();
@@ -680,11 +680,76 @@ private:
         return {{best, classify(best, alpha, beta)}, best_action};
     }
 
+    // Static ordering score: take the trick if the card can, cheapest winner
+    // first, otherwise throw the lowest card; when leading, try the highest
+    // card first. Only the order changes, never the action set or the value,
+    // and equal scores keep the canonical order through a stable sort.
+    auto static_score(const Position& position, const Action& action) const -> int
+    {
+        if (action.is_pass()) {
+            return -1000000;
+        }
+        const Card* card = position.card(*action.card_id());
+        if (card == nullptr) {
+            return 0;
+        }
+        const int rank_thousandths = card->rank().millionths() / 1000;
+        const Trick& trick = position.current_trick();
+        if (trick.empty()) {
+            return rank_thousandths;
+        }
+        const bool no_trump = position.contract() == Contract::NoTrump;
+        const std::size_t trump =
+            static_cast<std::size_t>(static_cast<int>(position.contract()));
+        std::size_t led = 4U;
+        int best_class = -1;
+        int best_rank = -1;
+        for (const TrickPlay& play : trick) {
+            if (play.action.is_pass()) {
+                continue;
+            }
+            const Card* played = position.card(*play.action.card_id());
+            if (played == nullptr) {
+                continue;
+            }
+            if (!play.action.effective_suit().has_value()) {
+                continue;
+            }
+            const std::size_t suit =
+                static_cast<std::size_t>(*play.action.effective_suit());
+            if (led == 4U) {
+                led = suit;
+            }
+            const int card_class = (!no_trump && suit == trump)
+                ? 3 : (suit == led ? 2 : 0);
+            const int card_rank = played->rank().millionths();
+            if (card_class > best_class ||
+                (card_class == best_class && card_rank > best_rank)) {
+                best_class = card_class;
+                best_rank = card_rank;
+            }
+        }
+        if (!action.effective_suit().has_value()) {
+            return 0;
+        }
+        const std::size_t suit =
+            static_cast<std::size_t>(*action.effective_suit());
+        const int card_class = (!no_trump && suit == trump)
+            ? 3 : (suit == led ? 2 : 0);
+        const bool wins = card_class > best_class ||
+            (card_class == best_class && rank_thousandths * 1000 > best_rank);
+        if (wins) {
+            return 1000000 - rank_thousandths;
+        }
+        return -rank_thousandths;
+    }
+
     // Reorders the same legal actions by proven priority only: table best
     // action, then this ply's main-variation action, then the killers. All
     // remaining actions keep the canonical legal order. Static rank ordering
     // and history were measured to increase node counts and are not used.
     void order_actions(
+        Position& position,
         ActionList& actions,
         const std::uint32_t depth,
         const TranspositionEntry* cached)
@@ -736,6 +801,28 @@ private:
                 default:
                     ++options_.stats->ordering_static;
                     break;
+            }
+        }
+        if (options_.use_ordering_score && position.has_shareable_identity() &&
+            actions.size() > target + 1U &&
+            actions.size() <= ActionList::InlineCapacity) {
+            // Score once, then a stable insertion sort so equal scores keep the
+            // canonical order.
+            std::array<int, ActionList::InlineCapacity> scores{};
+            for (std::size_t index = target; index < actions.size(); ++index) {
+                scores[index] = static_score(position, actions[index]);
+            }
+            for (std::size_t index = target + 1U; index < actions.size(); ++index) {
+                const Action action = actions[index];
+                const int score = scores[index];
+                std::size_t place = index;
+                while (place > target && scores[place - 1U] < score) {
+                    actions[place] = actions[place - 1U];
+                    scores[place] = scores[place - 1U];
+                    --place;
+                }
+                actions[place] = action;
+                scores[place] = score;
             }
         }
     }

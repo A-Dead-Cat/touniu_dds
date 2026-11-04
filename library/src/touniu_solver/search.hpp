@@ -62,6 +62,10 @@ struct SearchOptions {
     // Follow a run of single-legal-action positions without searching each
     // link: the value of a forced position is the value of its only child.
     bool use_forced_chain = true;
+    // Order the actions that the priority list did not pick by a static score
+    // (take the trick, cheapest winner first; when leading, highest card
+    // first). Equal scores keep the canonical order.
+    bool use_ordering_score = true;
 };
 
 struct SearchResult {
