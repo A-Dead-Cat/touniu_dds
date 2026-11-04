@@ -134,8 +134,17 @@ choice when a card can legally be played.
 - Interior nodes may merge two plain cards that are indistinguishable for every
   remaining comparison: same single ordinary suit, same mode and effective suit,
   and no plain card in any hand or in the current trick with a rank strictly
-  between them. Any special, multi-suit or `+2` card that can still participate
-  disables the merge. The analysis root always reports every legal action.
+  between them. A special or multi-suit card blocks the merge only when its rank
+  lies inside the candidates' rank interval (inclusive); a rank strictly outside
+  compares identically against both candidates whatever suit it is played as. A
+  `+2` still in a hand always blocks, because its future draws could land between
+  the candidates; a `+2` already played in the current trick has finished
+  drawing. The analysis root always reports every legal action.
+- Imported positions may contain special cards whose single suit is NoTrump
+  (`+2NT`, `🚫NT`, `🔄NT`, `🍒NT`), matching the Playground palette. In a
+  no-trump contract such a card is trump for trick resolution; when it is not
+  led and does not follow the lead family it is recorded as a discard, so its
+  effect is invalid, matching the rules engine.
 - Search values are stored canonically from the North-South perspective. A
   contract query for East-West reports `total - canonical_ns`, where
   `total = completed tricks + tricks remaining` for the deal. Neither the

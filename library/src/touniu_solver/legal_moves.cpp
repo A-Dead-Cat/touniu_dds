@@ -79,6 +79,17 @@ auto is_trump_card(const State& state, const Card& card) -> bool
            card.intrinsic_suits().end();
 }
 
+// A NoTrump-suit special (e.g. +2NT) is a trump card for trick resolution in a
+// no-trump contract, but the rules engine only treats its effect as valid when
+// it is led or follows the lead family. It is played as a discard otherwise.
+auto is_no_trump_suit_special(const Card& card) -> bool
+{
+    return (card.kind() == CardKind::Block || card.kind() == CardKind::Reverse ||
+            card.kind() == CardKind::PlusTwo || card.kind() == CardKind::CherryBomb) &&
+           card.intrinsic_suits().size() == 1U &&
+           card.intrinsic_suits().front() == Suit::NoTrump;
+}
+
 void lead_actions_into(
     const State& state,
     const std::vector<CardId>& hand,
@@ -239,13 +250,11 @@ void legal_actions_into(
             : (is_joker(*card)
                    ? joker_trump_suit(state.contract())
                    : card->intrinsic_suits().front());
-        actions.push_back(Action::play(
-            id,
-            has_led_suit ? PlayMode::Follow
-                         : (is_trump_card(state, *card)
-                                ? PlayMode::Trump : PlayMode::Discard),
-            effective_suit
-        ));
+        const PlayMode mode = has_led_suit
+            ? PlayMode::Follow
+            : (is_no_trump_suit_special(*card) || !is_trump_card(state, *card)
+                   ? PlayMode::Discard : PlayMode::Trump);
+        actions.push_back(Action::play(id, mode, effective_suit));
     }
 }
 

@@ -10,6 +10,50 @@ auto normal_card(const std::uint64_t id, const Suit suit, const std::int32_t ran
     return Card::normal(CardId{id}, suit, Rank::integer(rank));
 }
 
+TEST(LegalMovesTest, NoTrumpSuitSpecialIsDiscardedRatherThanRuffed)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 1;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::special(CardId{1}, CardKind::PlusTwo, {Suit::NoTrump}),
+    };
+    auto state = State::create(scenario);
+    ASSERT_TRUE(state.has_value());
+    const Trick trick{{Seat::West, Action::play(CardId{9}, PlayMode::Lead, Suit::Spades)}};
+
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    ASSERT_EQ(actions.size(), 1U);
+    // The rules engine validates a special's effect only when it is led or
+    // follows the lead family, so an off-suit +2NT is played as a discard.
+    EXPECT_EQ(
+        actions.front(),
+        Action::play(CardId{1}, PlayMode::Discard, Suit::NoTrump));
+}
+
+TEST(LegalMovesTest, NoTrumpSuitSpecialFollowsANoTrumpLead)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 1;
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::special(CardId{1}, CardKind::PlusTwo, {Suit::NoTrump}),
+    };
+    auto state = State::create(scenario);
+    ASSERT_TRUE(state.has_value());
+    const Trick trick{{Seat::West, Action::play(CardId{9}, PlayMode::Lead, Suit::NoTrump)}};
+
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(
+        actions.front(),
+        Action::play(CardId{1}, PlayMode::Follow, Suit::NoTrump));
+}
+
 TEST(LegalMovesTest, RequiresNormalSuitWhenPlayerHasLedSuit)
 {
     Scenario scenario;

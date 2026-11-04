@@ -552,5 +552,41 @@ TEST(PositionTest, MaintainedIdentityMatchesReferenceAtConstruction)
     expect_identity_parity(*simple);
 }
 
+TEST(PositionTest, NoTrumpSuitPlusTwoDiscardsWithoutDrawingAndWinsAsTrump)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 1;
+    scenario.hands[static_cast<int>(Seat::West)] = {normal_card(1, Suit::Spades, 13)};
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        Card::special(CardId{2}, CardKind::PlusTwo, {Suit::NoTrump}),
+    };
+    scenario.hands[static_cast<int>(Seat::East)] = {normal_card(3, Suit::Hearts, 5)};
+    scenario.hands[static_cast<int>(Seat::South)] = {normal_card(4, Suit::Diamonds, 5)};
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+
+    ASSERT_TRUE(position->apply(
+        action_for(position->legal_actions(), CardId{1}, PlayMode::Lead)));
+    const std::vector<Action> north_actions = position->legal_actions();
+    ASSERT_EQ(north_actions.size(), 1U);
+    EXPECT_EQ(
+        north_actions.front(),
+        Action::play(CardId{2}, PlayMode::Discard, Suit::NoTrump));
+
+    const std::size_t east_before = position->hand(Seat::East).size();
+    ASSERT_TRUE(position->apply(north_actions.front()));
+    // An off-suit +2NT is not a valid effect, so nobody draws.
+    EXPECT_EQ(position->hand(Seat::East).size(), east_before);
+
+    while (!position->is_finished()) {
+        const std::vector<Action> actions = position->legal_actions();
+        ASSERT_FALSE(actions.empty());
+        ASSERT_TRUE(position->apply(actions.front()));
+    }
+    EXPECT_EQ(position->tricks_won(Seat::North), 1U);
+}
+
 }  // namespace
 }  // namespace touniu_solver

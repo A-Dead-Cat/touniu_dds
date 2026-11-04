@@ -124,12 +124,17 @@ auto make_live_card(const TouniuLiveCard& input) -> std::optional<Card>
     case TOUNIU_CARD_BLOCK:
     case TOUNIU_CARD_REVERSE:
     case TOUNIU_CARD_PLUS_TWO:
-    case TOUNIU_CARD_CHERRY_BOMB:
+    case TOUNIU_CARD_CHERRY_BOMB: {
+        // The Playground offers specials with one ordinary suit, all four
+        // ordinary suits, or the NoTrump suit. Only mixed masks are invalid.
+        const bool single_no_trump =
+            suits.size() == 1U && suits.front() == Suit::NoTrump;
         if ((suits.size() != 1U && suits.size() != 4U) ||
-            !has_only_normal_suits(suits)) {
+            (!has_only_normal_suits(suits) && !single_no_trump)) {
             return std::nullopt;
         }
         return Card::special(id, static_cast<CardKind>(input.kind), suits);
+    }
     case TOUNIU_CARD_NO_TRUMP:
         if (suits.size() != 1U || suits.front() != Suit::NoTrump ||
             !rank.has_value()) {

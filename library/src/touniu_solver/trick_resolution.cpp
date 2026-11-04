@@ -23,7 +23,14 @@ auto is_trump(const State& state, const Card& card, const Action& action) -> boo
         return true;
     }
     if (state.contract() == Contract::NoTrump) {
-        return card.kind() == CardKind::NoTrump;
+        // An intrinsic NoTrump suit makes a card trump: NoTrump-kind cards and
+        // NoTrump-suit specials. The action's effective suit is not used here,
+        // because a three-flower cat or a wild discard also carries NoTrump.
+        return card.kind() == CardKind::NoTrump ||
+               std::find(
+                   card.intrinsic_suits().begin(),
+                   card.intrinsic_suits().end(),
+                   Suit::NoTrump) != card.intrinsic_suits().end();
     }
     return action.effective_suit() == contract_trump(state.contract());
 }
