@@ -8,6 +8,7 @@ extern "C" {
 
 #define TOUNIU_SOLVER_ABI_VERSION 1U
 #define TOUNIU_SOLVER_ABI_VERSION_V2 2U
+#define TOUNIU_SOLVER_ABI_VERSION_V4 4U
 
 enum TouniuSolverError {
     TOUNIU_SOLVER_OK = 0,
@@ -112,6 +113,7 @@ int32_t touniu_solver_solve(
     TouniuSolveOutput* output
 );
 
+
 /*
  * ABI v2: analyze every legal action of an already-partially-played position.
  * `suit_mask` is a bit set over TouniuSuit (1 << suit) encoding the card's
@@ -179,6 +181,29 @@ int32_t touniu_solver_analyze_actions_v2(
     uint32_t record_capacity,
     uint32_t* required_count
 );
+
+/*
+ * ABI v4: the single best action for the side on move, with no per-action
+ * table. Same request layout as v2 (mid-trick positions included) but the
+ * caller sets abi_version to TOUNIU_SOLVER_ABI_VERSION_V4. `final_tricks` is
+ * the target partnership's total after that action, so a defender can order
+ * candidate replies by it. Costs about one solve instead of one solve per
+ * legal action, which is what a deadline-bounded defender needs.
+ */
+typedef struct TouniuBestMoveOutput {
+    int32_t error;
+    int32_t tricks;
+    uint8_t is_pass;
+    uint64_t card_id;
+    int32_t mode;
+    int32_t effective_suit;
+} TouniuBestMoveOutput;
+
+int32_t touniu_solver_best_move_v4(
+    const TouniuAnalyzeRequest* request,
+    TouniuBestMoveOutput* output
+);
+
 
 /*
  * Contract-table memory tier. It only changes how many slots the contract

@@ -322,6 +322,61 @@ auto decode_live_position(const TouniuAnalyzeRequest& request)
 
 }  // namespace
 
+extern "C" auto touniu_solver_best_move_v4(
+    const TouniuAnalyzeRequest* request,
+    TouniuBestMoveOutput* output) -> std::int32_t
+{
+    if (output == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    *output = {};
+    if (request == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    if (request->abi_version != TOUNIU_SOLVER_ABI_VERSION_V4) {
+        return TOUNIU_SOLVER_UNSUPPORTED_VERSION;
+    }
+    if (!analyze_actions_request_is_valid(*request)) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    const auto live = decode_live_position(*request);
+    if (!live.has_value()) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+    auto position = Position::create(*live);
+    if (!position.has_value()) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    const SearchResult result = solve(
+        *position,
+        static_cast<Partnership>(request->target_partnership),
+        request->use_alpha_beta != 0U);
+
+    output->error = TOUNIU_SOLVER_OK;
+    output->tricks = result.tricks;
+    const std::optional<Action>& action = result.best_action;
+    if (!action.has_value()) {
+        output->is_pass = 1U;
+        output->card_id = 0U;
+        output->mode = TOUNIU_PLAY_NONE;
+        output->effective_suit = TOUNIU_SUIT_NONE;
+        return TOUNIU_SOLVER_OK;
+    }
+    output->is_pass = action->is_pass() ? 1U : 0U;
+    if (action->is_pass()) {
+        output->card_id = 0U;
+        output->mode = TOUNIU_PLAY_NONE;
+        output->effective_suit = TOUNIU_SUIT_NONE;
+    } else {
+        output->card_id = action->card_id()->value;
+        output->mode = static_cast<std::int32_t>(*action->mode());
+        output->effective_suit = static_cast<std::int32_t>(*action->effective_suit());
+    }
+    return TOUNIU_SOLVER_OK;
+}
+
 extern "C" auto touniu_solver_analyze_actions_v2(
     const TouniuAnalyzeRequest* request,
     TouniuAnalyzeAction* records,
