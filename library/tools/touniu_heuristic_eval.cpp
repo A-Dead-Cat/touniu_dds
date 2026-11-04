@@ -33,7 +33,7 @@ struct Args {
     int lead_rule = 0;  // 0 = highest card, 1 = lowest card, 2 = low card of longest suit
     bool dd_leads = false;   // use double dummy on EW leads, heuristic when following
     bool dd_follows = false; // use double dummy when following, heuristic on leads
-    bool signals = false;   // pick among equivalent cards by a count signal
+    bool signals = false;   // pick the card inside its class by the convention
 };
 
 auto parse_args(const int argc, char** argv) -> Args
@@ -185,15 +185,31 @@ auto beats(const Card& candidate, const Card& best) -> bool
 }
 
 // The heuristic defence for one EW decision. Returns the chosen action.
-// Count signal: among the cards that are provably interchangeable with the
-// chosen one, play the high card when the defender holds an even number of
-// cards in that suit and the low card when it holds an odd number. The choice
-// cannot change the result (the engine proves the cards equivalent), but a
-// player who reads the spot cards can count the suit.
-auto signal_pick(
+// Declared card-selection convention, so a player reading EW's spot cards can
+// infer the suit length. It is a real policy, not a value-neutral relabelling:
+// it can pick a card that is not interchangeable with the heuristic's choice.
+//
+//   leading a small card (9 or lower)
+//     odd count      -> lowest
+//     even count     -> third highest
+//     two small only -> the higher of the two
+//   following with a small card
+//     even count     -> highest small card
+//     two small only -> the first (lowest)
+//     four cards     -> the highest small card that is not the lowest
+//   from a touching sequence (T9, JT, ...)
+//     leading  -> the top of the sequence
+//     following-> the lowest of the sequence
+auto small_rank(const Card& card) -> bool
+{
+    return card.rank().millionths() <= 9 * 1'000'000;
+}
+
+auto convention_pick(
     const Position& position,
     const Action& chosen,
-    const ActionList& legal) -> Action
+    const ActionList& legal,
+    const bool leading) -> Action
 {
     if (chosen.is_pass() || !chosen.card_id().has_value()) {
         return chosen;
@@ -206,35 +222,95 @@ auto signal_pick(
     if (suit == Suit::NoTrump) {
         return chosen;
     }
-    const Seat me = position.next_player();
-    int length = 0;
-    for (const CardId id : position.hand(me)) {
-        const Card* card = position.card(id);
-        if (card != nullptr && card->intrinsic_suits().size() == 1U &&
-            card->intrinsic_suits().front() == suit) {
-            ++length;
-        }
-    }
-    const bool play_high = length % 2 == 0;
-    const Action* best = nullptr;
-    const Card* best_card = nullptr;
+
+    // Every legal action of this suit, in descending rank.
+    std::vector<const Action*> suited;
+    std::vector<const Card*> suited_cards;
     for (const Action& action : legal) {
         if (action.is_pass() || !action.card_id().has_value()) continue;
         const Card* card = position.card(*action.card_id());
-        if (card == nullptr) continue;
-        if (!position.equivalent_actions(chosen, action)) continue;
-        if (best_card == nullptr) {
-            best = &action;
-            best_card = card;
-            continue;
-        }
-        const bool higher = card->rank() > best_card->rank();
-        if (play_high ? higher : !higher) {
-            best = &action;
-            best_card = card;
-        }
+        if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
+        if (card->intrinsic_suits().front() != suit) continue;
+        suited.push_back(&action);
+        suited_cards.push_back(card);
     }
-    return best != nullptr ? *best : chosen;
+    if (suited.size() <= 1U) {
+        return chosen;
+    }
+    std::vector<std::size_t> order(suited.size());
+    for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
+    std::sort(order.begin(), order.end(), [&](const std::size_t left, const std::size_t right) {
+        return suited_cards[left]->rank() > suited_cards[right]->rank();
+    });
+    const auto at = [&](const std::size_t index) -> const Action& {
+        return *suited[order[index]];
+    };
+    const auto rank_at = [&](const std::size_t index) -> bool {
+        return small_rank(*suited_cards[order[index]]);
+    };
+
+    // My full holding in the suit (the legal list equals it when leading).
+    std::vector<Rank> holding;
+    for (const CardId id : position.hand(position.next_player())) {
+        const Card* card = position.card(id);
+        if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
+        if (card->intrinsic_suits().front() == suit) holding.push_back(card->rank());
+    }
+    const std::size_t count = holding.size();
+
+    if (!leading) {
+        // Touching sequence: follow with its lowest card.
+        const std::int32_t chosen_rank = chosen_card->rank().millionths();
+        for (std::size_t index = 1; index < order.size(); ++index) {
+            const std::int32_t rank = suited_cards[order[index]]->rank().millionths();
+            if (rank + 1'000'000 == chosen_rank) {
+                // Walk down the touching run.
+                std::size_t lowest = index;
+                std::int32_t current = rank;
+                for (std::size_t next = index + 1; next < order.size(); ++next) {
+                    const std::int32_t below = suited_cards[order[next]]->rank().millionths();
+                    if (below + 1'000'000 != current) break;
+                    lowest = next;
+                    current = below;
+                }
+                return at(lowest);
+            }
+        }
+        if (!small_rank(*chosen_card)) {
+            return chosen;
+        }
+        if (count == 2U) {
+            return at(order.size() - 1U);        // doubleton of small cards: lowest
+        }
+        if (count == 4U) {
+            // Highest small card that is not the lowest one.
+            for (std::size_t index = 0; index + 1U < order.size(); ++index) {
+                if (rank_at(index)) return at(index);
+            }
+            return chosen;
+        }
+        if (count % 2U == 0U) {
+            for (std::size_t index = 0; index < order.size(); ++index) {
+                if (rank_at(index)) return at(index);
+            }
+            return chosen;
+        }
+        return chosen;
+    }
+
+    if (!small_rank(*chosen_card)) {
+        return chosen;   // the heuristic led a high card: keep the top of its run
+    }
+    if (count == 2U) {
+        const bool both_small = std::all_of(holding.begin(), holding.end(), [](const Rank& rank) {
+            return rank.millionths() <= 9 * 1'000'000;
+        });
+        return both_small ? at(0) : chosen;
+    }
+    if (count % 2U == 1U) {
+        return at(order.size() - 1U);            // odd count: lowest
+    }
+    return order.size() >= 3U ? at(2) : chosen;  // even count: third highest
 }
 
 auto heuristic_action(const Position& position, const int lead_rule) -> Action
@@ -421,8 +497,11 @@ auto main(const int argc, char** argv) -> int
                     (void) legal_before;
                     action = heuristic_action(*position, args.lead_rule);
                     if (args.signals && action.has_value()) {
-                        action = signal_pick(
-                            *position, *action, position->legal_actions());
+                        action = convention_pick(
+                            *position,
+                            *action,
+                            position->legal_actions(),
+                            leading_now);
                     }
                 }
                 if (!action.has_value()) return 1;
