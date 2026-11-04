@@ -33,6 +33,7 @@ struct Args {
     int lead_rule = 0;  // 0 = highest card, 1 = lowest card, 2 = low card of longest suit
     bool dd_leads = false;   // use double dummy on EW leads, heuristic when following
     bool dd_follows = false; // use double dummy when following, heuristic on leads
+    bool signals = false;   // pick among equivalent cards by a count signal
 };
 
 auto parse_args(const int argc, char** argv) -> Args
@@ -58,6 +59,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.dd_leads = true;
         } else if (flag == "--dd-follows") {
             args.dd_follows = true;
+        } else if (flag == "--signals") {
+            args.signals = true;
         }
     }
     return args;
@@ -182,6 +185,58 @@ auto beats(const Card& candidate, const Card& best) -> bool
 }
 
 // The heuristic defence for one EW decision. Returns the chosen action.
+// Count signal: among the cards that are provably interchangeable with the
+// chosen one, play the high card when the defender holds an even number of
+// cards in that suit and the low card when it holds an odd number. The choice
+// cannot change the result (the engine proves the cards equivalent), but a
+// player who reads the spot cards can count the suit.
+auto signal_pick(
+    const Position& position,
+    const Action& chosen,
+    const ActionList& legal) -> Action
+{
+    if (chosen.is_pass() || !chosen.card_id().has_value()) {
+        return chosen;
+    }
+    const Card* chosen_card = position.card(*chosen.card_id());
+    if (chosen_card == nullptr || chosen_card->intrinsic_suits().size() != 1U) {
+        return chosen;
+    }
+    const Suit suit = chosen_card->intrinsic_suits().front();
+    if (suit == Suit::NoTrump) {
+        return chosen;
+    }
+    const Seat me = position.next_player();
+    int length = 0;
+    for (const CardId id : position.hand(me)) {
+        const Card* card = position.card(id);
+        if (card != nullptr && card->intrinsic_suits().size() == 1U &&
+            card->intrinsic_suits().front() == suit) {
+            ++length;
+        }
+    }
+    const bool play_high = length % 2 == 0;
+    const Action* best = nullptr;
+    const Card* best_card = nullptr;
+    for (const Action& action : legal) {
+        if (action.is_pass() || !action.card_id().has_value()) continue;
+        const Card* card = position.card(*action.card_id());
+        if (card == nullptr) continue;
+        if (!position.equivalent_actions(chosen, action)) continue;
+        if (best_card == nullptr) {
+            best = &action;
+            best_card = card;
+            continue;
+        }
+        const bool higher = card->rank() > best_card->rank();
+        if (play_high ? higher : !higher) {
+            best = &action;
+            best_card = card;
+        }
+    }
+    return best != nullptr ? *best : chosen;
+}
+
 auto heuristic_action(const Position& position, const int lead_rule) -> Action
 {
     const Seat me = position.next_player();
@@ -362,7 +417,13 @@ auto main(const int argc, char** argv) -> int
                         solve(probe, Partnership::EastWest, true);
                     action = result.best_action;
                 } else {
+                    const ActionList legal_before = position->legal_actions();
+                    (void) legal_before;
                     action = heuristic_action(*position, args.lead_rule);
+                    if (args.signals && action.has_value()) {
+                        action = signal_pick(
+                            *position, *action, position->legal_actions());
+                    }
                 }
                 if (!action.has_value()) return 1;
                 if (args.diagnose) {
