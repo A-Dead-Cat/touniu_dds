@@ -36,6 +36,8 @@ struct Args {
     bool signals = false;   // pick the card inside its class by the convention
     bool void_aware = false; // use the voids inferred from the play
     bool full_info = false;  // EW sees all four hands, as double dummy does
+    bool per_deal = false;   // one JSON line per deal, for corpus analysis
+    int show = -1;           // dump the hands and the play of this deal
     bool simulate = false;   // value a lead by playing its trick out, plus tempo
 };
 
@@ -70,7 +72,16 @@ auto parse_args(const int argc, char** argv) -> Args
             args.full_info = true;
         } else if (flag == "--simulate") {
             args.simulate = true;
+        } else if (flag == "--per-deal") {
+            args.per_deal = true;
+        } else if (flag == "--show" && index + 1 < argc) {
+            args.show = std::atoi(argv[++index]);
+            args.diagnose = true;
+            args.verbose = true;
         }
+    }
+    if (args.per_deal) {
+        args.diagnose = true;
     }
     return args;
 }
@@ -933,6 +944,177 @@ auto category_of(const Position& position) -> int
 
 }  // namespace
 
+
+auto suit_letter(const Suit suit) -> char
+{
+    switch (suit) {
+        case Suit::Spades: return 'S';
+        case Suit::Hearts: return 'H';
+        case Suit::Diamonds: return 'D';
+        case Suit::Clubs: return 'C';
+        default: return '?';
+    }
+}
+
+auto rank_text(const Rank rank) -> std::string
+{
+    const long long micro = rank.millionths();
+    if (micro % 1'000'000 != 0) {
+        char buffer[32];
+        std::snprintf(buffer, sizeof(buffer), "%.3f", static_cast<double>(micro) / 1e6);
+        return buffer;
+    }
+    const long long value = micro / 1'000'000;
+    switch (value) {
+        case 10: return "T";
+        case 11: return "J";
+        case 12: return "Q";
+        case 13: return "K";
+        case 14: return "A";
+        default: return std::to_string(value);
+    }
+}
+
+auto card_text(const Card& card) -> std::string
+{
+    switch (card.kind()) {
+        case CardKind::Block: return "BLOCK";
+        case CardKind::Reverse: return "REVERSE";
+        case CardKind::PlusTwo: return "+2";
+        case CardKind::CherryBomb: return "BOMB";
+        case CardKind::FourSuit: return "4SUIT";
+        case CardKind::BigJoker: return "BIGJOKER";
+        case CardKind::SmallJoker: return "SMALLJOKER";
+        case CardKind::ThreeSuitCat: return "CAT";
+        case CardKind::NoTrump: return "NT" + rank_text(card.rank());
+        case CardKind::Normal: break;
+    }
+    std::string text;
+    for (const Suit suit : card.intrinsic_suits()) {
+        text.push_back(suit_letter(suit));
+    }
+    return text + rank_text(card.rank());
+}
+
+auto seat_letter(const Seat seat) -> char
+{
+    switch (seat) {
+        case Seat::North: return 'N';
+        case Seat::East: return 'E';
+        case Seat::South: return 'S';
+        case Seat::West: return 'W';
+    }
+    return '?';
+}
+
+auto print_deal(const Position& position) -> void
+{
+    std::printf("contract %d  trump %s  tricks %u\n",
+                static_cast<int>(position.contract()),
+                position.contract() == Contract::NoTrump ? "none" : "suit",
+                position.tricks_remaining());
+    for (int seat = 0; seat < 4; ++seat) {
+        const Seat who = static_cast<Seat>(seat);
+        std::printf("  %c:", seat_letter(who));
+        for (const CardId id : position.hand(who)) {
+            const Card* card = position.card(id);
+            if (card != nullptr) std::printf(" %s", card_text(*card).c_str());
+        }
+        std::printf("\n");
+    }
+}
+
+auto kind_code(const Card& card) -> int
+{
+    switch (card.kind()) {
+        case CardKind::Normal: return 0;
+        case CardKind::CherryBomb: return 1;
+        case CardKind::PlusTwo: return 2;
+        case CardKind::Block: return 3;
+        case CardKind::ThreeSuitCat: return 4;
+        case CardKind::BigJoker: return 5;
+        case CardKind::SmallJoker: return 6;
+        case CardKind::NoTrump: return 7;
+        case CardKind::FourSuit: return 8;
+        case CardKind::Reverse: return 9;
+    }
+    return 9;
+}
+
+auto suit_code(const Card& card) -> int
+{
+    const auto suits = card.intrinsic_suits();
+    if (suits.empty()) return -1;
+    switch (suits.front()) {
+        case Suit::Spades: return 0;
+        case Suit::Hearts: return 1;
+        case Suit::Diamonds: return 2;
+        case Suit::Clubs: return 3;
+        default: return -1;
+    }
+}
+
+auto in_suit(const Card& card, const int code) -> bool
+{
+    if (code < 0) return false;
+    const Suit want = static_cast<Suit>(code);
+    for (const Suit suit : card.intrinsic_suits()) {
+        if (suit == want) return true;
+    }
+    return false;
+}
+
+struct SuitTops {
+    long long highest = -1;
+    long long eWBest = -1;
+    long long nSBest = -1;
+};
+
+auto suit_tops(const Position& position, const int code) -> SuitTops
+{
+    SuitTops tops;
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card == nullptr || !in_suit(*card, code)) continue;
+            const long long rank = card->rank().millionths();
+            if (rank > tops.highest) tops.highest = rank;
+            if (seat == 1 || seat == 3) {
+                if (rank > tops.eWBest) tops.eWBest = rank;
+            } else if (rank > tops.nSBest) {
+                tops.nSBest = rank;
+            }
+        }
+    }
+    return tops;
+}
+
+auto side_length(const Position& position, const int code, const bool ew) -> int
+{
+    int count = 0;
+    for (int seat = 0; seat < 4; ++seat) {
+        if (((seat == 1 || seat == 3)) != ew) continue;
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card != nullptr && in_suit(*card, code)) ++count;
+        }
+    }
+    return count;
+}
+
+auto trick_top_rank(const Position& position) -> long long
+{
+    long long top = -1;
+    for (const TrickPlay& play : position.current_trick()) {
+        if (play.action.is_pass()) continue;
+        const Card* card = position.card(*play.action.card_id());
+        if (card != nullptr) {
+            top = std::max<long long>(top, card->rank().millionths());
+        }
+    }
+    return top;
+}
+
 auto main(const int argc, char** argv) -> int
 {
     const Args args = parse_args(argc, argv);
@@ -952,8 +1134,25 @@ auto main(const int argc, char** argv) -> int
         // Double-dummy value for EW from the opening position.
         auto dd_position = Position::create(scenario);
         const int dd_value = solve(*dd_position, Partnership::EastWest, true).tricks;
+        int bombs_ew = 0, bombs_ns = 0, free_ew = 0, free_ns = 0, cats_ew = 0, cats_ns = 0;
+        for (int seat = 0; seat < 4; ++seat) {
+            const bool ew = seat == 0 || seat == 2;
+            for (const CardId id : position->hand(static_cast<Seat>(seat))) {
+                const Card* card = position->card(id);
+                if (card == nullptr) continue;
+                if (card->kind() == CardKind::CherryBomb) (ew ? bombs_ew : bombs_ns) += 1;
+                if (card->kind() == CardKind::PlusTwo) (ew ? free_ew : free_ns) += 1;
+                if (card->kind() == CardKind::ThreeSuitCat) (ew ? cats_ew : cats_ns) += 1;
+            }
+        }
 
+        const Diagnose diagnose_before = diagnose;
+        if (args.show == deal_index) {
+            std::printf("=== deal %d ===\n", deal_index);
+            print_deal(*position);
+        }
         int guard = 0;
+        int trick_number = 1;
         while (!position->is_finished() && guard < 400) {
             ++guard;
             const Seat mover = position->next_player();
@@ -982,7 +1181,7 @@ auto main(const int argc, char** argv) -> int
                     }
                 }
                 if (!action.has_value()) return 1;
-                if (args.diagnose) {
+if (args.diagnose) {
                     const int category = category_of(*position);
                     // Both values are the final EW trick count from this point.
                     const int best = solve(*position, Partnership::EastWest, true).tricks;
@@ -991,8 +1190,34 @@ auto main(const int argc, char** argv) -> int
                         chosen = solve(*position, Partnership::EastWest, true).tricks;
                         position->undo();
                     }
-                    if (category == 0 && best > chosen && diagnose.mistakes[0] < 6U) {
-                        const Card* picked = action->is_pass()
+                    if (args.show == deal_index && best > chosen) {
+                        const Card* picked_now =
+                            action->is_pass() || !action->card_id().has_value()
+                            ? nullptr : position->card(*action->card_id());
+                        Position best_copy_now = *position;
+                        const SearchResult best_result_now =
+                            solve(best_copy_now, Partnership::EastWest, true);
+                        const Card* better_now =
+                            best_result_now.best_action.has_value() &&
+                                !best_result_now.best_action->is_pass()
+                            ? position->card(*best_result_now.best_action->card_id())
+                            : nullptr;
+                        static const char* const names[3] = {
+                            "lead", "follow-partner", "follow-opponent"};
+                        std::printf("  !! %s T%d: value %d best %d | played %s | dd %s\n",
+                                    names[category],
+                                    args.cards -
+                                        static_cast<int>(position->tricks_remaining()) + 1,
+                                    chosen, best,
+                                    picked_now != nullptr ? card_text(*picked_now).c_str() : "pass",
+                                    better_now != nullptr ? card_text(*better_now).c_str() : "pass");
+                    }
+                    const bool record_mistake = best > chosen &&
+                        args.show != deal_index &&
+                        (args.per_deal || (category == 0 && diagnose.mistakes[0] < 6U));
+                    if (record_mistake) {
+                        const Card* picked =
+                            action->is_pass() || !action->card_id().has_value()
                             ? nullptr : position->card(*action->card_id());
                         Position best_copy = *position;
                         const SearchResult best_result =
@@ -1002,23 +1227,57 @@ auto main(const int argc, char** argv) -> int
                                 !best_result.best_action->is_pass()
                             ? position->card(*best_result.best_action->card_id())
                             : nullptr;
-                        const int trick = 9 - static_cast<int>(position->tricks_remaining());
-                        std::printf("  lead %d: value %d best %d | ", trick, chosen, best);
-                        if (picked != nullptr) {
+                        const int trick = args.cards -
+                            static_cast<int>(position->tricks_remaining()) + 1;
+                        if (!args.per_deal) {
                             std::printf(
-                                "picked suit %d rank %d | ",
-                                static_cast<int>(picked->intrinsic_suits().front()),
-                                picked->rank().millionths() / 1000000);
-                        } else {
-                            std::printf("picked pass | ");
-                        }
-                        if (better != nullptr) {
+                                "  !! %s %d: value %d best %d | played %s | dd %s\n",
+                                category == 0 ? "lead" : "follow", trick, chosen, best,
+                                picked != nullptr ? card_text(*picked).c_str() : "pass",
+                                better != nullptr ? card_text(*better).c_str() : "pass");
+                        } else if (category == 0) {
+                            const int cs = picked != nullptr ? suit_code(*picked) : -1;
+                            const int ds = better != nullptr ? suit_code(*better) : -1;
+                            const SuitTops ct = suit_tops(*position, cs);
+                            const SuitTops dt = suit_tops(*position, ds);
+                            const long long cr = picked != nullptr
+                                ? picked->rank().millionths() : -1;
+                            const long long dr = better != nullptr
+                                ? better->rank().millionths() : -1;
                             std::printf(
-                                "dd suit %d rank %d\n",
-                                static_cast<int>(better->intrinsic_suits().front()),
-                                better->rank().millionths() / 1000000);
+                                "LM trick=%d regret=%d same=%d cs=%d cr=%lld ckind=%d"
+                                " ctop=%d clost=%d chole=%d ds=%d dr=%lld dkind=%d dtop=%d"
+                                " cwlen=%d csl=%d dwlen=%d dsl=%d nsbest=%lld\n",
+                                trick, best - chosen, cs == ds, cs, cr,
+                                picked != nullptr ? kind_code(*picked) : -1,
+                                picked != nullptr && cr == ct.highest,
+                                cs >= 0 && ct.nSBest > cr,
+                                cs >= 0 && cr == ct.highest,
+                                ds, dr,
+                                better != nullptr ? kind_code(*better) : -1,
+                                better != nullptr && dr == dt.highest,
+                                side_length(*position, cs, true),
+                                side_length(*position, cs, false),
+                                side_length(*position, ds, true),
+                                side_length(*position, ds, false),
+                                ct.nSBest);
                         } else {
-                            std::printf("dd pass\n");
+                            const long long top = trick_top_rank(*position);
+                            const int ps = picked != nullptr ? suit_code(*picked) : -1;
+                            const SuitTops pt = suit_tops(*position, ps);
+                            const long long pr = picked != nullptr
+                                ? picked->rank().millionths() : -1;
+                            const long long dr = better != nullptr
+                                ? better->rank().millionths() : -1;
+                            std::printf(
+                                "FM cat=%d trick=%d regret=%d pk=%d pr=%lld ptop=%d"
+                                " pwin=%d pwaste=%d dk=%d dr=%lld dwin=%d\n",
+                                category, trick, best - chosen,
+                                picked != nullptr ? kind_code(*picked) : -1, pr,
+                                picked != nullptr && pr == pt.highest,
+                                pr > top, picked != nullptr && pr == pt.highest,
+                                better != nullptr ? kind_code(*better) : -1, dr,
+                                dr > top);
                         }
                     }
                     diagnose.decisions[static_cast<std::size_t>(category)] += 1;
@@ -1034,8 +1293,18 @@ auto main(const int argc, char** argv) -> int
                 action = result.best_action;
             }
             if (!action.has_value()) break;
+            if (args.show == deal_index) {
+                const Card* shown = action->is_pass() || !action->card_id().has_value()
+                    ? nullptr : position->card(*action->card_id());
+                std::printf("  T%d %c: %s\n", trick_number, seat_letter(mover),
+                            shown != nullptr ? card_text(*shown).c_str() : "pass");
+            }
             tracker.observe(*position, *action);
+            const bool ended_trick = position->current_trick().size() == 3U;
             if (!position->apply(*action)) break;
+            if (ended_trick) {
+                ++trick_number;
+            }
         }
 
         const int aw = static_cast<int>(position->tricks_won(Seat::West));
@@ -1046,6 +1315,23 @@ auto main(const int argc, char** argv) -> int
         const int loss = std::max(0, dd_value - actual);
         total_loss += static_cast<std::uint64_t>(loss);
         ++counted;
+        if (args.per_deal) {
+            std::printf(
+                "{\"loss\":%d,\"dd\":%d,\"actual\":%d,\"contract\":%d,"
+                "\"bombsEw\":%d,\"bombsNs\":%d,\"freeEw\":%d,\"freeNs\":%d,"
+                "\"catsEw\":%d,\"catsNs\":%d,"
+                "\"leadDecisions\":%llu,\"leadRegret\":%llu,"
+                "\"partnerDecisions\":%llu,\"partnerRegret\":%llu,"
+                "\"opponentDecisions\":%llu,\"opponentRegret\":%llu}\n",
+                loss, dd_value, actual, static_cast<int>(scenario.contract),
+                bombs_ew, bombs_ns, free_ew, free_ns, cats_ew, cats_ns,
+                diagnose.decisions[0] - diagnose_before.decisions[0],
+                diagnose.regret[0] - diagnose_before.regret[0],
+                diagnose.decisions[1] - diagnose_before.decisions[1],
+                diagnose.regret[1] - diagnose_before.regret[1],
+                diagnose.decisions[2] - diagnose_before.decisions[2],
+                diagnose.regret[2] - diagnose_before.regret[2]);
+        }
         if (args.verbose) {
             std::printf(
                 "deal %d: dd %d actual %d loss %d\n",
