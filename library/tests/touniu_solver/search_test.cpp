@@ -822,6 +822,58 @@ TEST(SearchTest, LeaderSureTricksNeverExceedsTheOracleOnSpecialDeals)
     EXPECT_GT(checked, 30);
 }
 
+auto plain_deal(const std::uint32_t seed, const int per_hand) -> Scenario
+{
+    std::vector<Card> deck;
+    std::uint64_t id = 1;
+    for (int suit = 0; suit < 4; ++suit) {
+        for (int rank = 2; rank <= 14; ++rank) {
+            deck.push_back(Card::normal(
+                CardId{id++}, static_cast<Suit>(suit), Rank::integer(rank)));
+        }
+    }
+    std::uint32_t state = seed * 2654435761U + 7U;
+    for (std::size_t index = deck.size(); index > 1; --index) {
+        state ^= state << 13U;
+        state ^= state >> 17U;
+        state ^= state << 5U;
+        std::swap(deck[index - 1], deck[state % index]);
+    }
+    Scenario scenario;
+    scenario.contract = Contract::NoTrump;
+    scenario.next_player = Seat::West;
+    scenario.tricks_remaining = static_cast<std::uint32_t>(per_hand);
+    for (int slot = 0; slot < 4 * per_hand; ++slot) {
+        scenario.hands[slot % 4].push_back(deck[static_cast<std::size_t>(slot)]);
+    }
+    return scenario;
+}
+
+TEST(SearchTest, ShareableTableKeyMatchesTheOracleOnPlainDeals)
+{
+    for (std::uint32_t seed = 1; seed <= 24; ++seed) {
+        const Scenario scenario = plain_deal(seed, 3);
+        auto shared_position = Position::create(scenario);
+        auto exact_position = Position::create(scenario);
+        auto oracle_position = Position::create(scenario);
+        ASSERT_TRUE(shared_position.has_value());
+        ASSERT_TRUE(exact_position.has_value());
+        ASSERT_TRUE(oracle_position.has_value());
+        ASSERT_TRUE(shared_position->has_shareable_identity());
+
+        SearchOptions shared{true, true, nullptr};
+        SearchOptions exact{true, true, nullptr};
+        exact.use_shareable_identity = false;
+        const int shared_value =
+            solve(*shared_position, Partnership::NorthSouth, shared).tricks;
+        const int exact_value =
+            solve(*exact_position, Partnership::NorthSouth, exact).tricks;
+        const int expected = oracle(*oracle_position, Partnership::NorthSouth);
+        EXPECT_EQ(shared_value, expected) << "seed " << seed;
+        EXPECT_EQ(exact_value, expected) << "seed " << seed;
+    }
+}
+
 TEST(SearchTest, SharedActionAnalysisMatchesOracleOnSeededDeals)
 {
     check_seeded_deals(SearchOptions{true, true, nullptr, false});

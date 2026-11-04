@@ -178,6 +178,16 @@ choice when a card can legally be played.
   play owns. They are cards played in earlier tricks and must stay in the
   catalog so later `+2` draws keep skipping their rank/suit templates; only
   duplicate IDs and duplicate ownership are rejected.
+- A deal whose universe is entirely ordinary single-suit cards keys the table
+  on the rank-compressed owner sequence instead: the live cards are walked in
+  rank order per bucket and each records its dense position and owner. Retired
+  cards vanish from that walk, so positions reached by playing interchangeable
+  cards, or by different rank renumberings of the same shape, share an entry.
+  Every other deal (specials, NoTrump-suit cards, four-suit cards, cats,
+  jokers, or anything that can still draw a floating card) falls back to the
+  exact identity below. Two hashes are produced from the same canonical walk,
+  so a table hit still requires the pair to match; the switch only changes
+  sharing, never a reported value.
 - The position identity used by the table is maintained incrementally from
   applied and undone actions and includes each seat's own win count. Positions
   that differ only in which partner won an earlier trick are therefore not

@@ -71,6 +71,14 @@ public:
     };
     [[nodiscard]] auto leader_sure_tricks() const -> SureTricks;
 
+    // Transposition key. For a deal whose deal universe is entirely ordinary
+    // single-suit cards the key is built from the rank-compressed owner
+    // sequence over the live cards, so positions that differ only by swapping
+    // two interchangeable cards of one hand share an entry. Every other deal
+    // falls back to the exact incremental identity.
+    [[nodiscard]] auto table_identity() const -> PositionIdentity;
+    [[nodiscard]] auto has_shareable_identity() const -> bool;
+
 private:
     friend auto recompute_position_identity(const Position& position)
         -> PositionIdentity;
@@ -155,6 +163,12 @@ private:
     // Block cards still in hand, tracked because a block can force the
     // partner to pass on a trick it would otherwise win.
     std::array<std::uint32_t, 4> block_cards_{};
+    // True when the deal universe is only ordinary single-suit cards, which is
+    // what makes the rank-compressed table key sound.
+    bool shareable_identity_ = false;
+    // Owner of each universe bucket bit: seat index, or 0xFF when the card is
+    // in the current trick or not in any hand.
+    std::array<std::array<std::uint8_t, 64>, 5> owner_of_{};
     std::vector<UndoRecord> undo_stack_;
 };
 

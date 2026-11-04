@@ -336,6 +336,8 @@ void Position::update_holdings(
             target[card->suits[index]] = set
                 ? target[card->suits[index]] | bit
                 : target[card->suits[index]] & ~bit;
+            owner_of_[card->suits[index]][card->bits[index]] =
+                set ? static_cast<std::uint8_t>(seat) : 0xFFU;
         }
     }
     if (card->trump_bit != 0xFFU) {
@@ -350,6 +352,10 @@ void Position::rebuild_universe()
     live_mask_ = {};
     holdings_ = {};
     block_cards_ = {};
+    for (auto& bucket : owner_of_) {
+        bucket.fill(0xFFU);
+    }
+    shareable_identity_ = false;
 
     std::size_t plus_two_count = 0;
     for (int seat = 0; seat < 4; ++seat) {
@@ -526,6 +532,23 @@ void Position::rebuild_universe()
 
     live_mask_ = universe_.masks;
     universe_.enabled = true;
+    shareable_identity_ = universe_.predicted_ids.empty();
+    for (const UniverseCard& entry : universe_.cards) {
+        const Card* definition = state_.card(CardId{entry.id});
+        if (definition == nullptr || !is_plain_single_suit(*definition)) {
+            shareable_identity_ = false;
+            break;
+        }
+    }
+    for (int seat = 0; seat < 4 && shareable_identity_; ++seat) {
+        for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+            const Card* definition = state_.card(id);
+            if (definition == nullptr || !is_plain_single_suit(*definition)) {
+                shareable_identity_ = false;
+                break;
+            }
+        }
+    }
     for (int seat = 0; seat < 4; ++seat) {
         for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
             update_holdings(static_cast<Seat>(seat), id, true);
@@ -711,6 +734,102 @@ auto Position::leader_sure_tricks() const -> SureTricks
     count = std::min(count, state_.tricks_remaining());
     result.tricks = count;
     return result;
+}
+
+auto Position::has_shareable_identity() const -> bool
+{
+    return universe_.enabled && shareable_identity_;
+}
+
+auto Position::table_identity() const -> PositionIdentity
+{
+    if (!has_shareable_identity()) {
+        return identity_;
+    }
+    // Only the relative order of the live cards and their owners matters, so
+    // the key walks the live buckets in rank order and records the run of
+    // owners. Retired cards vanish from the walk, which is what lets two
+    // positions reached by playing interchangeable cards share an entry.
+    std::uint64_t primary = 0x9E3779B97F4A7C15ULL;
+    std::uint64_t verifier = 0xC2B2AE3D27D4EB4FULL;
+    const auto mix = [](std::uint64_t& target, std::uint64_t value) {
+        target ^= value + 0x9E3779B97F4A7C15ULL + (target << 6U) + (target >> 2U);
+        target *= 0xFF51AFD7ED558CCDULL;
+        target ^= target >> 33U;
+    };
+    for (std::size_t bucket = 0; bucket < 5; ++bucket) {
+        std::uint64_t live = live_mask_[bucket];
+        std::uint32_t dense = 0;
+        while (live != 0) {
+            const int bit = 63 - std::countl_zero(live);
+            live &= ~(std::uint64_t{1} << static_cast<std::uint8_t>(bit));
+            const std::uint64_t token =
+                (static_cast<std::uint64_t>(bucket) << 32U) |
+                (static_cast<std::uint64_t>(dense) << 8U) |
+                owner_of_[bucket][static_cast<std::size_t>(bit)];
+            mix(primary, token);
+            mix(verifier, token ^ 0xA5A5A5A5A5A5A5A5ULL);
+            ++dense;
+        }
+    }
+    mix(primary,
+        (static_cast<std::uint64_t>(state_.next_player()) << 40U) |
+        (static_cast<std::uint64_t>(state_.direction()) << 36U) |
+        (static_cast<std::uint64_t>(state_.contract()) << 32U) |
+        (static_cast<std::uint64_t>(state_.tricks_remaining()) << 24U) |
+        (static_cast<std::uint64_t>(tricks_won_[0]) << 20U) |
+        (static_cast<std::uint64_t>(tricks_won_[1]) << 16U) |
+        (static_cast<std::uint64_t>(tricks_won_[2]) << 12U) |
+        (static_cast<std::uint64_t>(tricks_won_[3]) << 8U) |
+        (static_cast<std::uint64_t>(valid_reverse_count_ & 1U) << 7U) |
+        (static_cast<std::uint64_t>(
+            pending_block_.has_value()
+                ? static_cast<std::uint8_t>(*pending_block_) : 7U) << 4U) |
+        (state_.draw_index() & 0x0FU));
+    mix(verifier,
+        (static_cast<std::uint64_t>(state_.next_player()) << 41U) |
+        (static_cast<std::uint64_t>(state_.direction()) << 37U) |
+        (static_cast<std::uint64_t>(state_.contract()) << 33U) |
+        (static_cast<std::uint64_t>(state_.tricks_remaining()) << 25U) |
+        (static_cast<std::uint64_t>(tricks_won_[3]) << 21U) |
+        (static_cast<std::uint64_t>(tricks_won_[2]) << 17U) |
+        (static_cast<std::uint64_t>(tricks_won_[1]) << 13U) |
+        (static_cast<std::uint64_t>(tricks_won_[0]) << 9U) |
+        (static_cast<std::uint64_t>(valid_reverse_count_ & 1U) << 8U) |
+        (static_cast<std::uint64_t>(
+            pending_block_.has_value()
+                ? static_cast<std::uint8_t>(*pending_block_) : 7U) << 5U) |
+        (state_.draw_index() & 0x1FU));
+    for (const TrickPlay& play : current_trick_) {
+        std::uint64_t token =
+            (static_cast<std::uint64_t>(play.seat) << 56U) |
+            (static_cast<std::uint64_t>(play.action.is_pass() ? 1U : 0U) << 55U);
+        if (!play.action.is_pass()) {
+            const Card* card = state_.card(*play.action.card_id());
+            if (card == nullptr || card->intrinsic_suits().size() != 1U) {
+                return identity_;
+            }
+            const std::size_t suit = suit_index(card->intrinsic_suits().front());
+            const std::optional<std::uint8_t> bit =
+                universe_bit(card->id(), static_cast<Suit>(suit));
+            if (!bit.has_value()) {
+                return identity_;
+            }
+            const std::uint64_t above =
+                live_mask_[suit] & ~((std::uint64_t{2}
+                    << static_cast<std::uint8_t>(*bit)) - 1U);
+            token |= (static_cast<std::uint64_t>(suit) << 48U) |
+                (static_cast<std::uint64_t>(std::popcount(above)) << 32U) |
+                (static_cast<std::uint64_t>(
+                    static_cast<std::uint8_t>(*play.action.mode())) << 28U) |
+                (static_cast<std::uint64_t>(
+                    static_cast<std::uint8_t>(
+                        *play.action.effective_suit())) << 24U);
+        }
+        mix(primary, token);
+        mix(verifier, token ^ 0x5A5A5A5A5A5A5A5AULL);
+    }
+    return PositionIdentity{primary, verifier};
 }
 
 auto Position::equivalent_actions(const Action& left, const Action& right) const

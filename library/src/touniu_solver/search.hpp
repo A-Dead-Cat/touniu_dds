@@ -54,6 +54,10 @@ struct SearchOptions {
     // strictly outside the candidate gap; narrow mode disables a pair as soon
     // as any non-plain card remains. Kept switchable for A/B measurements.
     bool use_wide_equivalence = true;
+    // Plain deals key the transposition table on the rank-compressed owner
+    // sequence, so positions that only differ by interchangeable cards share
+    // an entry. Set to false to compare against the exact CardId identity.
+    bool use_shareable_identity = true;
 };
 
 struct SearchResult {

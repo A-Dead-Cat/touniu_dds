@@ -790,5 +790,102 @@ TEST(PositionTest, LeaderSureTricksCountsTopCardsAndTheHighestTrump)
     EXPECT_EQ(plain->leader_sure_tricks().tricks, 0U);
 }
 
+auto ladder_scenario() -> Scenario
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[static_cast<int>(Seat::West)] = {
+        normal_card(1, Suit::Spades, 2),
+        normal_card(2, Suit::Spades, 3),
+    };
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        normal_card(3, Suit::Spades, 4),
+        normal_card(4, Suit::Spades, 5),
+    };
+    scenario.hands[static_cast<int>(Seat::East)] = {
+        normal_card(5, Suit::Spades, 6),
+        normal_card(6, Suit::Spades, 7),
+    };
+    scenario.hands[static_cast<int>(Seat::South)] = {
+        normal_card(7, Suit::Spades, 8),
+        normal_card(8, Suit::Spades, 9),
+    };
+    return scenario;
+}
+
+void play_single_trick(Position& position, const std::uint64_t west_lead)
+{
+    const std::vector<Action> lead = position.legal_actions();
+    ASSERT_TRUE(position.apply(action_for(lead, CardId{west_lead}, PlayMode::Lead)));
+    const std::vector<Action> first = position.legal_actions();
+    ASSERT_TRUE(position.apply(action_for(first, CardId{3}, PlayMode::Follow)));
+    const std::vector<Action> second = position.legal_actions();
+    ASSERT_TRUE(position.apply(action_for(second, CardId{5}, PlayMode::Follow)));
+    const std::vector<Action> third = position.legal_actions();
+    ASSERT_TRUE(position.apply(action_for(third, CardId{7}, PlayMode::Follow)));
+}
+
+TEST(PositionTest, ShareableIdentityMergesEquivalentCardsAfterATrick)
+{
+    auto leading_two = Position::create(ladder_scenario());
+    auto leading_three = Position::create(ladder_scenario());
+    ASSERT_TRUE(leading_two.has_value());
+    ASSERT_TRUE(leading_three.has_value());
+    ASSERT_TRUE(leading_two->has_shareable_identity());
+
+    play_single_trick(*leading_two, 1);
+    play_single_trick(*leading_three, 2);
+
+    const auto two_key = leading_two->table_identity();
+    const auto three_key = leading_three->table_identity();
+    EXPECT_EQ(two_key.primary, three_key.primary);
+    EXPECT_EQ(two_key.verifier, three_key.verifier);
+}
+
+TEST(PositionTest, ShareableIdentitySeparatesOwnership)
+{
+    // Same ranks remain, but the five belongs to East and the seven to North.
+    Scenario swapped = ladder_scenario();
+    swapped.hands[static_cast<int>(Seat::North)][1] = normal_card(4, Suit::Spades, 7);
+    swapped.hands[static_cast<int>(Seat::East)][1] = normal_card(6, Suit::Spades, 5);
+    auto straight = Position::create(ladder_scenario());
+    auto mixed = Position::create(swapped);
+    ASSERT_TRUE(straight.has_value());
+    ASSERT_TRUE(mixed.has_value());
+
+    play_single_trick(*straight, 1);
+    const std::vector<Action> lead = mixed->legal_actions();
+    ASSERT_TRUE(mixed->apply(action_for(lead, CardId{1}, PlayMode::Lead)));
+    const std::vector<Action> first = mixed->legal_actions();
+    ASSERT_TRUE(mixed->apply(action_for(first, CardId{3}, PlayMode::Follow)));
+    const std::vector<Action> second = mixed->legal_actions();
+    ASSERT_TRUE(mixed->apply(action_for(second, CardId{5}, PlayMode::Follow)));
+    const std::vector<Action> third = mixed->legal_actions();
+    ASSERT_TRUE(mixed->apply(action_for(third, CardId{7}, PlayMode::Follow)));
+
+    const auto straight_key = straight->table_identity();
+    const auto mixed_key = mixed->table_identity();
+    EXPECT_FALSE(
+        straight_key.primary == mixed_key.primary &&
+        straight_key.verifier == mixed_key.verifier);
+}
+
+TEST(PositionTest, ShareableIdentityIsUnavailableForSpecialCards)
+{
+    Scenario scenario = ladder_scenario();
+    scenario.hands[static_cast<int>(Seat::South)].push_back(
+        Card::big_joker(CardId{9}));
+    scenario.tricks_remaining = 2;
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    EXPECT_FALSE(position->has_shareable_identity());
+    // The fallback key must still be the exact incremental identity.
+    const auto key = position->table_identity();
+    EXPECT_EQ(key.primary, position->identity().primary);
+    EXPECT_EQ(key.verifier, position->identity().verifier);
+}
+
 }  // namespace
 }  // namespace touniu_solver

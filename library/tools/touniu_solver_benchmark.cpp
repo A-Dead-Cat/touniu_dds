@@ -23,6 +23,8 @@ struct Args {
     bool batch_only = false;
     bool special_deck = false;
     bool narrow_equivalence = false;
+    bool exact_key = false;
+    bool verify_key = false;
 };
 
 auto parse_uint(const char* text, std::uint32_t& out) -> bool
@@ -62,6 +64,10 @@ auto parse_args(const int argc, char** argv) -> Args
             args.special_deck = true;
         } else if (flag == "--narrow-equivalence") {
             args.narrow_equivalence = true;
+        } else if (flag == "--exact-key") {
+            args.exact_key = true;
+        } else if (flag == "--verify-key") {
+            args.verify_key = true;
         }
     }
     if (args.cards < 1) args.cards = 1;
@@ -356,9 +362,54 @@ int main(int argc, char** argv)
             return 1;
         }
 
+        if (args.verify_key) {
+            auto shared_position = Position::create(scenario);
+            SearchStats shared_stats;
+            SearchOptions shared_options{true, true, &shared_stats};
+            shared_options.use_wide_equivalence = !args.narrow_equivalence;
+            const auto shared_start = std::chrono::steady_clock::now();
+            const std::vector<ActionAnalysis> shared = analyze_actions(
+                *shared_position, Partnership::NorthSouth, shared_options);
+            const auto shared_end = std::chrono::steady_clock::now();
+            SearchStats exact_stats;
+            SearchOptions exact_options = shared_options;
+            exact_options.stats = &exact_stats;
+            exact_options.use_shareable_identity = false;
+            const auto exact_start = std::chrono::steady_clock::now();
+            const std::vector<ActionAnalysis> exact = analyze_actions(
+                *position, Partnership::NorthSouth, exact_options);
+            const auto exact_end = std::chrono::steady_clock::now();
+            int mismatches = 0;
+            if (shared.size() != exact.size()) {
+                mismatches = 1;
+            } else {
+                for (std::size_t index = 0; index < shared.size(); ++index) {
+                    if (shared[index].final_tricks != exact[index].final_tricks) {
+                        ++mismatches;
+                    }
+                }
+            }
+            const double shared_ms = std::chrono::duration<double, std::milli>(
+                shared_end - shared_start).count();
+            const double exact_ms = std::chrono::duration<double, std::milli>(
+                exact_end - exact_start).count();
+            std::printf(
+                "{\"cards\":%d,\"sample\":%d,\"seed\":%u,\"mismatches\":%d,"
+                "\"shared_nodes\":%llu,\"exact_nodes\":%llu,"
+                "\"shared_ms\":%.3f,\"exact_ms\":%.3f}\n",
+                args.cards, sample, args.seed + static_cast<std::uint32_t>(sample),
+                mismatches,
+                static_cast<unsigned long long>(shared_stats.nodes),
+                static_cast<unsigned long long>(exact_stats.nodes),
+                shared_ms, exact_ms);
+            std::fflush(stdout);
+            continue;
+        }
+
         SearchStats stats;
         SearchOptions options{true, true, &stats};
         options.use_wide_equivalence = !args.narrow_equivalence;
+        options.use_shareable_identity = !args.exact_key;
         const auto start = std::chrono::steady_clock::now();
         std::vector<ActionAnalysis> analyses;
         if (args.legacy) {
@@ -403,6 +454,10 @@ int main(int argc, char** argv)
         totals.equivalence_blocked_special += stats.equivalence_blocked_special;
         totals.equivalence_blocked_interval += stats.equivalence_blocked_interval;
         totals.table_replacements += stats.table_replacements;
+    }
+
+    if (args.verify_key) {
+        return 0;
     }
 
     const double average_ms = total_ms / args.samples;

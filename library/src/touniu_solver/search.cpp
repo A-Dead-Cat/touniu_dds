@@ -348,7 +348,8 @@ private:
     auto mtd_value(Position& position, int lower, int upper) -> SearchValue
     {
         int guess = (lower + upper) / 2;
-        const PositionIdentity identity = position.identity();
+        const PositionIdentity identity = options_.use_shareable_identity
+            ? position.table_identity() : position.identity();
         if (options_.use_transposition_table) {
             const TranspositionTable::Probe probe = table_.probe(identity);
             if (probe.entry != nullptr && probe.entry->exact.has_value()) {
@@ -409,7 +410,8 @@ private:
         }
 
         const std::uint32_t depth = search_depth(position);
-        const PositionIdentity identity = position.identity();
+        const PositionIdentity identity = options_.use_shareable_identity
+            ? position.table_identity() : position.identity();
         const int caller_alpha = alpha;
         const int caller_beta = beta;
         const bool prune = options_.use_alpha_beta;
