@@ -9,3 +9,12 @@ cc_binary(
     local_defines = DDS_LOCAL_DEFINES,
     deps = ["//library/src/touniu_solver:search"],
 )
+
+cc_binary(
+    name = "touniu_heuristic_eval",
+    srcs = ["touniu_heuristic_eval.cpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS,
+    local_defines = DDS_LOCAL_DEFINES,
+    deps = ["//library/src/touniu_solver:search"],
+)
