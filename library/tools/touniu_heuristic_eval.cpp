@@ -34,6 +34,8 @@ struct Args {
     bool dd_leads = false;   // use double dummy on EW leads, heuristic when following
     bool dd_follows = false; // use double dummy when following, heuristic on leads
     bool signals = false;   // pick the card inside its class by the convention
+    bool void_aware = false; // use the voids inferred from the play
+    bool full_info = false;  // EW sees all four hands, as double dummy does
 };
 
 auto parse_args(const int argc, char** argv) -> Args
@@ -61,6 +63,10 @@ auto parse_args(const int argc, char** argv) -> Args
             args.dd_follows = true;
         } else if (flag == "--signals") {
             args.signals = true;
+        } else if (flag == "--void-aware") {
+            args.void_aware = true;
+        } else if (flag == "--full-info") {
+            args.full_info = true;
         }
     }
     return args;
@@ -313,7 +319,162 @@ auto convention_pick(
     return order.size() >= 3U ? at(2) : chosen;  // even count: third highest
 }
 
-auto heuristic_action(const Position& position, const int lead_rule) -> Action
+// Voids inferred from the cards already played: public information that a
+// defender is entitled to use. void_seat[seat][suit] is true when that seat has
+// failed to follow the suit at some point.
+struct PlayTracker {
+    std::array<std::array<bool, 5>, 4> void_seat{};
+    std::array<std::array<bool, 5>, 4> seen_suit{};
+
+    void observe(const Position& before, const Action& action)
+    {
+        const Seat mover = before.next_player();
+        const Trick& trick = before.current_trick();
+        const bool leading = trick.empty();
+        std::size_t led = 4U;
+        for (const TrickPlay& play : trick) {
+            if (play.action.is_pass() || !play.action.effective_suit().has_value()) continue;
+            led = static_cast<std::size_t>(*play.action.effective_suit());
+            break;
+        }
+        if (action.is_pass()) return;
+        const Card* card = before.card(*action.card_id());
+        if (card == nullptr) return;
+        const std::size_t suit = card->intrinsic_suits().empty()
+            ? 4U : static_cast<std::size_t>(card->intrinsic_suits().front());
+        if (!leading && led < 4U) {
+            if (suit == led) {
+                seen_suit[static_cast<std::size_t>(mover)][led] = true;
+            } else if (!before.legal_actions().empty()) {
+                // It played another suit (or a multi-suit card) while the lead
+                // suit was on: a real void only when it had no card of that
+                // suit and no multi-suit option, so record it conservatively.
+                seen_suit[static_cast<std::size_t>(mover)][led] = true;
+            }
+        }
+        for (const Suit intrinsic : card->intrinsic_suits()) {
+            seen_suit[static_cast<std::size_t>(mover)]
+                     [static_cast<std::size_t>(intrinsic)] = true;
+        }
+    }
+};
+
+// Full-information lead: the defender sees all four hands (the same assumption
+// double dummy makes), so it does not need a search to know which suit cashes,
+// which one an opponent can ruff and which one gives the partner a ruff. The
+// cost is a scan of the hands, not a tree.
+auto full_info_lead(const Position& position, const ActionList& legal) -> Action
+{
+    const Seat me = position.next_player();
+    const Seat partner = partner_of(me);
+    std::array<Seat, 2> opponents{};
+    {
+        int slot = 0;
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat other = static_cast<Seat>(seat);
+            if (other != me && other != partner) {
+                opponents[static_cast<std::size_t>(slot++)] = other;
+            }
+        }
+    }
+
+    // Highest live card per suit, and who holds it.
+    std::array<std::optional<Rank>, 4> top_rank{};
+    std::array<Seat, 4> top_seat{};
+    std::array<bool, 4> partner_void{};
+    std::array<bool, 4> opponent_void{};
+    std::array<int, 4> length{};
+    std::array<bool, 4> opponent_has_trump{};
+    std::array<bool, 4> partner_has_trump{};
+    for (int seat = 0; seat < 4; ++seat) {
+        const Seat other = static_cast<Seat>(seat);
+        for (const CardId id : position.hand(other)) {
+            const Card* card = position.card(id);
+            if (card == nullptr) continue;
+            const bool trump_card = acts_as_trump(position, *card);
+            if (trump_card) {
+                if (other == partner) partner_has_trump.fill(true);
+                if (other != me && other != partner) opponent_has_trump.fill(true);
+            }
+            if (card->intrinsic_suits().size() != 1U) continue;
+            const std::size_t suit =
+                static_cast<std::size_t>(card->intrinsic_suits().front());
+            if (suit >= 4U) continue;
+            if (other == me) length[suit] += 1;
+            if (!top_rank[suit].has_value() || card->rank() > *top_rank[suit]) {
+                top_rank[suit] = card->rank();
+                top_seat[suit] = other;
+            }
+            if (opponent_has_trump[suit] && other != me && other != partner) {
+                opponent_void[suit] = false;   // it has a card of the suit
+            }
+        }
+    }
+    // Second pass for the voids: a seat void in a suit has no card of it.
+    for (std::size_t suit = 0; suit < 4U; ++suit) {
+        bool partner_has = false;
+        bool opponent_has = false;
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat other = static_cast<Seat>(seat);
+            if (other != me && other != partner && other == partner) continue;
+            bool holds = false;
+            for (const CardId id : position.hand(other)) {
+                const Card* card = position.card(id);
+                if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
+                if (static_cast<std::size_t>(card->intrinsic_suits().front()) == suit) {
+                    holds = true;
+                    break;
+                }
+            }
+            if (other == partner) partner_has = holds;
+            else if (other != me) opponent_has = opponent_has || holds;
+        }
+        partner_void[suit] = !partner_has;
+        opponent_void[suit] = !opponent_has;
+    }
+
+    const Action* best = nullptr;
+    double best_score = -1e9;
+    const Card* best_card = nullptr;
+    for (const Action& action : legal) {
+        if (action.is_pass() || !action.card_id().has_value()) continue;
+        const Card* card = position.card(*action.card_id());
+        if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
+        const std::size_t suit =
+            static_cast<std::size_t>(card->intrinsic_suits().front());
+        if (suit >= 4U) continue;
+        double score = 0.0;
+        const bool top_is_ours = top_rank[suit].has_value() &&
+            (top_seat[suit] == me || top_seat[suit] == partner);
+        // Cashing a suit our side controls is worth a lot; leading a suit the
+        // opponents control gives a trick away.
+        score += top_is_ours ? 3.0 : -1.0;
+        // A ruff for the partner is nearly as good; a ruff for an opponent is
+        // the worst thing a lead can do.
+        if (partner_void[suit] && partner_has_trump[suit]) score += 2.0;
+        if (opponent_void[suit] && opponent_has_trump[suit]) score -= 4.0;
+        // Prefer short suits when the partner can ruff and long suits when we
+        // are establishing.
+        score += 0.1 * static_cast<double>(length[suit]);
+        // Inside the chosen suit: cash the highest card when our side holds the
+        // top, otherwise lead low. That is what the blind rule gets right.
+        const bool want_high = top_is_ours;
+        const bool better_card = best_card == nullptr ||
+            (want_high ? card->rank() > best_card->rank()
+                       : card->rank() < best_card->rank());
+        if (score > best_score || (score == best_score && better_card)) {
+            best_score = score;
+            best = &action;
+            best_card = card;
+        }
+    }
+    return best != nullptr ? *best : legal.front();
+}
+
+auto heuristic_action(
+    const Position& position,
+    const int lead_rule,
+    const PlayTracker* tracker) -> Action
 {
     const Seat me = position.next_player();
     const Seat partner = partner_of(me);
@@ -330,8 +491,70 @@ auto heuristic_action(const Position& position, const int lead_rule) -> Action
         return action.is_pass() ? nullptr : card_of(position, *action.card_id());
     };
 
+    if (trick.empty() && lead_rule == 3) {
+        return full_info_lead(position, legal);
+    }
     if (trick.empty()) {
-        // Leading. Three candidate rules, measured against double dummy:
+        // Leading. With the play tracker we know which seats have shown out of
+        // a suit: leading a suit an opponent is void in hands it a ruff, and
+        // leading one the partner is void in gives the partner a ruff.
+        if (tracker != nullptr) {
+            const Seat partner_seat = partner;
+            std::array<bool, 5> opponent_void{};
+            std::array<bool, 5> partner_void{};
+            for (std::size_t suit = 0; suit < 4U; ++suit) {
+                for (int seat = 0; seat < 4; ++seat) {
+                    const Seat other = static_cast<Seat>(seat);
+                    if (other == me || other == partner_seat) {
+                        if (other == partner_seat) {
+                            partner_void[suit] =
+                                partner_void[suit] ||
+                                !tracker->seen_suit[static_cast<std::size_t>(seat)][suit];
+                        }
+                        continue;
+                    }
+                    if (!tracker->seen_suit[static_cast<std::size_t>(seat)][suit]) {
+                        opponent_void[suit] = true;
+                    }
+                }
+            }
+            // Prefer a suit the partner is void in (a ruff), then any suit an
+            // opponent is not void in.
+            const Action* ruff_lead = nullptr;
+            const Action* safe_lead = nullptr;
+            for (const Action& action : legal) {
+                const Card* card = card_for(action);
+                if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
+                const std::size_t suit =
+                    static_cast<std::size_t>(card->intrinsic_suits().front());
+                if (suit >= 4U) continue;
+                if (opponent_void[suit]) continue;
+                if (partner_void[suit] && ruff_lead == nullptr) {
+                    ruff_lead = &action;
+                }
+                if (safe_lead == nullptr) safe_lead = &action;
+            }
+            if (ruff_lead != nullptr) return *ruff_lead;
+            if (safe_lead != nullptr) {
+                // Among safe suits keep the original preference: the highest
+                // card of the suit.
+                const Card* best = nullptr;
+                const Action* best_action = nullptr;
+                for (const Action& action : legal) {
+                    const Card* card = card_for(action);
+                    if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
+                    const std::size_t suit =
+                        static_cast<std::size_t>(card->intrinsic_suits().front());
+                    if (suit >= 4U || opponent_void[suit]) continue;
+                    if (best == nullptr || card->rank() > best->rank()) {
+                        best = card;
+                        best_action = &action;
+                    }
+                }
+                if (best_action != nullptr) return *best_action;
+            }
+        }
+        // Three candidate rules, measured against double dummy:
         // 0 cash the highest card, 1 lead the lowest card, 2 lead the lowest
         // card of the longest suit.
         if (lead_rule == 2) {
@@ -468,6 +691,7 @@ auto main(const int argc, char** argv) -> int
     std::uint64_t total_actual = 0;
     int counted = 0;
     Diagnose diagnose;
+    PlayTracker tracker;
 
     for (int deal_index = 0; deal_index < args.deals; ++deal_index) {
         const Scenario scenario = build_scenario(
@@ -495,7 +719,10 @@ auto main(const int argc, char** argv) -> int
                 } else {
                     const ActionList legal_before = position->legal_actions();
                     (void) legal_before;
-                    action = heuristic_action(*position, args.lead_rule);
+                    action = heuristic_action(
+                    *position,
+                    args.full_info ? 3 : args.lead_rule,
+                    args.void_aware ? &tracker : nullptr);
                     if (args.signals && action.has_value()) {
                         action = convention_pick(
                             *position,
@@ -557,6 +784,7 @@ auto main(const int argc, char** argv) -> int
                 action = result.best_action;
             }
             if (!action.has_value()) break;
+            tracker.observe(*position, *action);
             if (!position->apply(*action)) break;
         }
 
