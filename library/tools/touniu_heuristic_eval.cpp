@@ -491,16 +491,6 @@ auto full_info_lead(
     return best != nullptr ? *best : legal.front();
 }
 
-// A cherry bomb that wins a trick hands it to the seat after the thrower, so it
-// only pays when that seat is the partner. Discarding one has no effect, so a
-// bomb is a liability to dump rather than a card to win with.
-auto bomb_pays(const Position& position, const Seat mover) -> bool
-{
-    const int step = position.direction() == Direction::Forward ? 1 : 3;
-    const Seat next = static_cast<Seat>((static_cast<int>(mover) + step) % 4);
-    return next == partner_of(mover);
-}
-
 auto is_bomb(const Card* card) -> bool
 {
     return card != nullptr && card->kind() == CardKind::CherryBomb;
@@ -855,7 +845,6 @@ auto heuristic_action(
         winner == nullptr ? nullptr : card_of(position, *winner->action.card_id());
 
     // Cheapest card that beats the current winner; lowest card otherwise.
-    const bool bomb_is_good = bomb_pays(position, me);
     const Action* cheapest_winner = nullptr;
     const Card* cheapest_winner_card = nullptr;
     const Action* plus_two_winner = nullptr;
@@ -877,15 +866,12 @@ auto heuristic_action(
             lowest_bomb = &action;
         }
         if (winning_card == nullptr || !beats(*card, *winning_card)) continue;
-        // A bomb only wins for us when the trick goes to the partner, and a +2
-        // hands the next seat two cards, so both are kept as a last resort.
+        // A bomb that "wins" hands the trick to the seat after the thrower, and
+        // that seat is always an opponent because partnerships sit opposite, so
+        // a bomb is never a card to win with. A +2 hands the next seat two
+        // cards, so it is only used when nothing else beats the winner.
         if (is_bomb(card)) {
-            if (bomb_is_good &&
-                (cheapest_winner_card == nullptr ||
-                 card->rank() < cheapest_winner_card->rank())) {
-                cheapest_winner_card = card;
-                cheapest_winner = &action;
-            }
+            continue;
         } else if (is_plus_two(card)) {
             if (plus_two_winner_card == nullptr ||
                 card->rank() < plus_two_winner_card->rank()) {
