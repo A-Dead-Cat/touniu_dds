@@ -512,6 +512,150 @@ auto is_plus_two(const Card* card) -> bool
     return card != nullptr && card->kind() == CardKind::PlusTwo;
 }
 
+auto suit_code(const Card& card) -> int
+{
+    const auto suits = card.intrinsic_suits();
+    if (suits.empty()) return -1;
+    switch (suits.front()) {
+        case Suit::Spades: return 0;
+        case Suit::Hearts: return 1;
+        case Suit::Diamonds: return 2;
+        case Suit::Clubs: return 3;
+        default: return -1;
+    }
+}
+
+auto in_suit(const Card& card, const int code) -> bool
+{
+    if (code < 0) return false;
+    const Suit want = static_cast<Suit>(code);
+    for (const Suit suit : card.intrinsic_suits()) {
+        if (suit == want) return true;
+    }
+    return false;
+}
+
+auto next_seat_of(const Seat seat) -> Seat
+{
+    return static_cast<Seat>((static_cast<int>(seat) + 1) % 4);
+}
+
+// The rank the trick is compared on: a three-flower cat is the lowest card in a
+// no-trump contract, everything else uses its printed rank.
+auto effective_rank_micro(const Position& position, const Card* card) -> long long
+{
+    if (card == nullptr) return -1;
+    if (position.contract() == Contract::NoTrump &&
+        card->kind() == CardKind::ThreeSuitCat) {
+        return 999'999;
+    }
+    return card->rank().millionths();
+}
+
+// Seat and card that own the trick as it stands, following the engine: highest
+// effective rank, and a cherry bomb hands the trick to the seat after it.
+struct TrickLeader {
+    const TrickPlay* play = nullptr;
+    const Card* card = nullptr;
+    Seat seat = Seat::North;
+};
+
+auto trick_leader(const Position& position) -> TrickLeader
+{
+    TrickLeader leader;
+    for (const TrickPlay& play : position.current_trick()) {
+        if (play.action.is_pass()) continue;
+        const Card* card = position.card(*play.action.card_id());
+        if (card == nullptr) continue;
+        if (leader.card == nullptr ||
+            effective_rank_micro(position, card) >
+                effective_rank_micro(position, leader.card)) {
+            leader.play = &play;
+            leader.card = card;
+            leader.seat = play.seat;
+        }
+    }
+    if (leader.card != nullptr && leader.card->kind() == CardKind::CherryBomb) {
+        leader.seat = next_seat_of(leader.seat);
+    }
+    return leader;
+}
+
+auto card_rank_micro(const Card* card) -> long long
+{
+    return card == nullptr ? -1 : card->rank().millionths();
+}
+
+// Seats that still act after `me` in the trick being played.
+auto seats_behind(const Position& position, const Seat me) -> std::array<bool, 4>
+{
+    std::array<bool, 4> behind{};
+    behind.fill(true);
+    for (const TrickPlay& play : position.current_trick()) {
+        behind[static_cast<std::size_t>(play.seat)] = false;
+    }
+    behind[static_cast<std::size_t>(me)] = false;
+    return behind;
+}
+
+// Highest rank an opponent still to play can put on this suit. A seat void in
+// the suit that holds a trump-like card can beat anything, which no rank can
+// express, so it is reported through ruff_out.
+auto opponents_behind_best(
+    const Position& position,
+    const std::array<bool, 4>& behind,
+    const Seat me,
+    const int suit_code,
+    bool* ruff_out) -> long long
+{
+    long long best = -1;
+    for (int seat = 0; seat < 4; ++seat) {
+        if (!behind[static_cast<std::size_t>(seat)]) continue;
+        const Seat other = static_cast<Seat>(seat);
+        if (other == me || other == partner_of(me)) continue;
+        bool holds_suit = false;
+        bool holds_trump = false;
+        for (const CardId id : position.hand(other)) {
+            const Card* card = position.card(id);
+            if (card == nullptr) continue;
+            if (in_suit(*card, suit_code)) {
+                holds_suit = true;
+                // A bomb by an opponent hands the trick to the seat after them,
+                // which is our side, so it is not something to cover.
+                if (card->kind() != CardKind::CherryBomb) {
+                    best = std::max<long long>(
+                        best, effective_rank_micro(position, card));
+                }
+            }
+            if (acts_as_trump(position, *card) &&
+                card->kind() != CardKind::CherryBomb) {
+                holds_trump = true;
+            }
+        }
+        if (!holds_suit && holds_trump) *ruff_out = true;
+    }
+    return best;
+}
+
+// True when the leader still holds the rank touching the led card from below,
+// i.e. the lead came from a touching sequence (JT9, ...), where covering wastes
+// a card that the sequence would have won anyway.
+auto leader_holds_touching_lower(
+    const Position& position,
+    const Seat leader,
+    const Card& led,
+    const int suit_code) -> bool
+{
+    const long long led_rank = led.rank().millionths();
+    for (const CardId id : position.hand(leader)) {
+        const Card* card = position.card(id);
+        if (card == nullptr || !in_suit(*card, suit_code)) continue;
+        const long long rank = card->rank().millionths();
+        if (rank < led_rank && led_rank - rank <= 1'000'000) return true;
+    }
+    return false;
+}
+
 auto heuristic_action(
     const Position& position,
     const int lead_rule,
@@ -654,6 +798,37 @@ auto bomb_liability(const Position& position, const Seat our_partner) -> double
 
 // Play a candidate lead out with all four hands, score the trick, then add a
 // tempo term for who has to lead next. Constant work per candidate.
+// Tricks the two sides would take if this suit were led out on its own, from
+// the cards still held. Positive is good for East-West. Used to price the lead
+// that concedes a trick: giving one away only pays when the rest of the suit
+// comes back with interest.
+auto suit_run_balance(const Position& position, const int suit_code) -> int
+{
+    std::vector<std::pair<long long, bool>> cards;
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card == nullptr || !in_suit(*card, suit_code)) continue;
+            const bool ours = seat == 1 || seat == 3;
+            cards.emplace_back(card->rank().millionths(), ours);
+        }
+    }
+    std::sort(cards.begin(), cards.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    int balance = 0;
+    for (std::size_t index = 0; index < cards.size(); index += 4U) {
+        const std::size_t stop = std::min<std::size_t>(index + 4U, cards.size());
+        bool ours = cards[index].second;
+        for (std::size_t inner = index + 1U; inner < stop; ++inner) {
+            if (cards[inner].first == cards[index].first) continue;
+            ours = cards[inner].second;
+            break;
+        }
+        balance += ours ? 1 : -1;
+    }
+    return balance;
+}
+
 auto trick_value(const Position& position, const Action& lead) -> double
 {
     Position copy = position;
@@ -674,6 +849,17 @@ auto trick_value(const Position& position, const Action& lead) -> double
     }
     const int delta = our_tricks(copy) - before;
     double value = delta > 0 ? 1.0 : -1.0;
+    // A conceded trick is only worth its price if the same suit pays us back
+    // later; if the opponents hold the rest of the suit, the gift is worse than
+    // the bare trick.
+    if (delta <= 0 && lead.card_id().has_value()) {
+        const Card* led = position.card(*lead.card_id());
+        const int led_suit = led != nullptr ? suit_code(*led) : -1;
+        if (led_suit >= 0) {
+            const int balance = suit_run_balance(copy, led_suit);
+            if (balance < 0) value += 0.6 * static_cast<double>(balance);
+        }
+    }
     // Winner leads next, so value the position it has to lead from.
     const double quality = lead_quality(copy);
     const Seat leader = copy.next_player();
@@ -839,21 +1025,9 @@ auto heuristic_action(
     }
 
     // Following. Who is winning right now?
-    const TrickPlay* winner = nullptr;
-    for (const TrickPlay& play : trick) {
-        if (play.action.is_pass()) continue;
-        if (winner == nullptr) {
-            winner = &play;
-            continue;
-        }
-        const Card* have = card_of(position, *winner->action.card_id());
-        const Card* other = card_of(position, *play.action.card_id());
-        if (have == nullptr || other == nullptr) continue;
-        if (other->rank() > have->rank()) winner = &play;
-    }
-    const bool partner_winning = winner != nullptr && winner->seat == partner;
-    const Card* winning_card =
-        winner == nullptr ? nullptr : card_of(position, *winner->action.card_id());
+    const TrickLeader leader = trick_leader(position);
+    const bool partner_winning = leader.play != nullptr && leader.seat == partner;
+    const Card* winning_card = leader.card;
 
     // Cheapest card that beats the current winner; lowest card otherwise.
     const Action* cheapest_winner = nullptr;
@@ -894,6 +1068,127 @@ auto heuristic_action(
             cheapest_winner_card = card;
             cheapest_winner = &action;
         }
+    }
+
+    // ---- partnership follow rules ----
+    // The led suit, who led, and how far the trick has got.
+    const Card* led_card = nullptr;
+    Seat leader_seat = me;
+    int plays_before = 0;
+    for (const TrickPlay& play : trick) {
+        if (play.action.is_pass()) continue;
+        ++plays_before;
+        if (led_card == nullptr) {
+            led_card = card_of(position, *play.action.card_id());
+            leader_seat = play.seat;
+        }
+    }
+    const int led_suit = led_card != nullptr ? suit_code(*led_card) : -1;
+    if (led_suit >= 0) {
+        const std::array<bool, 4> behind = seats_behind(position, me);
+        int opponents_behind = 0;
+        for (int seat = 0; seat < 4; ++seat) {
+            if (!behind[static_cast<std::size_t>(seat)]) continue;
+            if (static_cast<Seat>(seat) != partner) ++opponents_behind;
+        }
+        bool ruff_behind = false;
+        const long long behind_best =
+            opponents_behind_best(position, behind, me, led_suit, &ruff_behind);
+        const long long top_now = effective_rank_micro(position, winning_card);
+
+        // Cheapest card that holds the trick even against the seats behind.
+        const Action* safe = nullptr;
+        const Card* safe_card = nullptr;
+        if (!ruff_behind) {
+            for (const Action& action : legal) {
+                const Card* card = card_for(action);
+                if (card == nullptr || is_bomb(card) || is_plus_two(card)) continue;
+                const long long rank = effective_rank_micro(position, card);
+                if (rank <= top_now || rank <= behind_best) continue;
+                if (safe_card == nullptr ||
+                    rank < effective_rank_micro(position, safe_card)) {
+                    safe_card = card;
+                    safe = &action;
+                }
+            }
+        }
+
+        const bool last_to_play = opponents_behind == 0;
+        if (last_to_play) {
+            // Fourth hand: the cheapest card that beats what is on the table.
+            if (partner_winning) {
+                const Action* low_non_bomb = nullptr;
+                const Card* low_non_bomb_card = nullptr;
+                for (const Action& action : legal) {
+                    const Card* card = card_for(action);
+                    if (card == nullptr || is_bomb(card)) continue;
+                    if (low_non_bomb_card == nullptr ||
+                        effective_rank_micro(position, card) <
+                            effective_rank_micro(position, low_non_bomb_card)) {
+                        low_non_bomb_card = card;
+                        low_non_bomb = &action;
+                    }
+                }
+                if (low_non_bomb != nullptr) return *low_non_bomb;
+                return lowest != nullptr ? *lowest : legal.front();
+            }
+            if (safe != nullptr) return *safe;
+            if (cheapest_winner != nullptr) return *cheapest_winner;
+            if (plus_two_winner != nullptr) return *plus_two_winner;
+            if (lowest_bomb != nullptr) return *lowest_bomb;
+            return lowest != nullptr ? *lowest : legal.front();
+        }
+
+        if (partner_winning) {
+            if (ruff_behind || behind_best > top_now) {
+                // The partner's trick is exposed to the fourth hand: take it
+                // over with the cheapest card that holds, and do not throw a
+                // card that dies under the fourth hand anyway.
+                if (safe != nullptr) return *safe;
+                return lowest != nullptr ? *lowest : legal.front();
+            }
+            // A bomb outranks the partner's card and redirects the trick to the
+            // seat after the thrower, so it would give this trick away.
+            const Action* low_non_bomb = nullptr;
+            const Card* low_non_bomb_card = nullptr;
+            for (const Action& action : legal) {
+                const Card* card = card_for(action);
+                if (card == nullptr || is_bomb(card)) continue;
+                if (low_non_bomb_card == nullptr ||
+                    effective_rank_micro(position, card) <
+                        effective_rank_micro(position, low_non_bomb_card)) {
+                    low_non_bomb_card = card;
+                    low_non_bomb = &action;
+                }
+            }
+            if (low_non_bomb != nullptr) return *low_non_bomb;
+            return lowest != nullptr ? *lowest : legal.front();
+        }
+
+        const bool second_hand = leader_seat != partner && plays_before == 1;
+        if (second_hand) {
+            // Second hand ducks in tempo. It covers only an honour that is not
+            // the tail of a touching sequence, or when the suit is nearly gone.
+            int suit_length = 0;
+            for (const CardId id : position.hand(me)) {
+                const Card* card = position.card(id);
+                if (card != nullptr && in_suit(*card, led_suit)) ++suit_length;
+            }
+            const bool honour = card_rank_micro(led_card) >= 10'000'000;
+            const bool from_sequence = led_card != nullptr &&
+                leader_holds_touching_lower(position, leader_seat, *led_card, led_suit);
+            if (honour && (!from_sequence || suit_length <= 2) &&
+                cheapest_winner != nullptr) {
+                return *cheapest_winner;
+            }
+            return lowest != nullptr ? *lowest : legal.front();
+        }
+
+        // Third hand (the partner led): stop the fourth hand from winning the
+        // trick cheaply. Hold it if a card can, otherwise do not spend a card
+        // that the fourth hand beats anyway.
+        if (safe != nullptr) return *safe;
+        return lowest != nullptr ? *lowest : legal.front();
     }
 
     if (partner_winning) {
@@ -977,23 +1272,28 @@ auto rank_text(const Rank rank) -> std::string
 
 auto card_text(const Card& card) -> std::string
 {
+    std::string name;
     switch (card.kind()) {
-        case CardKind::Block: return "BLOCK";
-        case CardKind::Reverse: return "REVERSE";
-        case CardKind::PlusTwo: return "+2";
-        case CardKind::CherryBomb: return "BOMB";
-        case CardKind::FourSuit: return "4SUIT";
-        case CardKind::BigJoker: return "BIGJOKER";
-        case CardKind::SmallJoker: return "SMALLJOKER";
-        case CardKind::ThreeSuitCat: return "CAT";
-        case CardKind::NoTrump: return "NT" + rank_text(card.rank());
+        case CardKind::Block: name = "BLOCK"; break;
+        case CardKind::Reverse: name = "REVERSE"; break;
+        case CardKind::PlusTwo: name = "+2"; break;
+        case CardKind::CherryBomb: name = "BOMB"; break;
+        case CardKind::FourSuit: name = "4SUIT"; break;
+        case CardKind::BigJoker: name = "BIGJOKER"; break;
+        case CardKind::SmallJoker: name = "SMALLJOKER"; break;
+        case CardKind::ThreeSuitCat: name = "CAT"; break;
+        case CardKind::NoTrump: name = "NT" + rank_text(card.rank()); break;
         case CardKind::Normal: break;
     }
-    std::string text;
+    // A block, reverse, +2 or bomb is still tied to one suit; name it so the
+    // deal cannot be misread.
     for (const Suit suit : card.intrinsic_suits()) {
-        text.push_back(suit_letter(suit));
+        if (static_cast<int>(suit) >= 4) continue;
+        if (card.kind() != CardKind::Normal) name.push_back('-');
+        name.push_back(suit_letter(suit));
     }
-    return text + rank_text(card.rank());
+    if (card.kind() == CardKind::Normal) name += rank_text(card.rank());
+    return name;
 }
 
 auto seat_letter(const Seat seat) -> char
@@ -1039,29 +1339,6 @@ auto kind_code(const Card& card) -> int
         case CardKind::Reverse: return 9;
     }
     return 9;
-}
-
-auto suit_code(const Card& card) -> int
-{
-    const auto suits = card.intrinsic_suits();
-    if (suits.empty()) return -1;
-    switch (suits.front()) {
-        case Suit::Spades: return 0;
-        case Suit::Hearts: return 1;
-        case Suit::Diamonds: return 2;
-        case Suit::Clubs: return 3;
-        default: return -1;
-    }
-}
-
-auto in_suit(const Card& card, const int code) -> bool
-{
-    if (code < 0) return false;
-    const Suit want = static_cast<Suit>(code);
-    for (const Suit suit : card.intrinsic_suits()) {
-        if (suit == want) return true;
-    }
-    return false;
 }
 
 struct SuitTops {
