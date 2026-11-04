@@ -534,8 +534,45 @@ auto lead_quality(const Position& position) -> double
 // would otherwise hand the trick to the seat after them, which is an opponent.
 // Against an opponent's bomb it is wasted work - their bomb already gives us
 // the trick - so the rule must not spend a 15 there.
+// A block card forces the seat after the blocker to pass. It only counts when
+// it can be played with its effect intact, which means following the led suit
+// or ruffing it with a block of the trump suit; a block discarded off-suit has
+// no effect at all.
+auto holds_block_of(
+    const Position& position,
+    const Seat seat,
+    const Suit led,
+    const std::optional<Suit> trump) -> bool
+{
+    bool void_in_led = true;
+    for (const CardId id : position.hand(seat)) {
+        const Card* card = position.card(id);
+        if (card != nullptr && card->intrinsic_suits().size() == 1U &&
+            card->intrinsic_suits().front() == led) {
+            void_in_led = false;
+        }
+    }
+    for (const CardId id : position.hand(seat)) {
+        const Card* card = position.card(id);
+        if (card == nullptr || card->kind() != CardKind::Block) continue;
+        if (card->intrinsic_suits().size() != 1U) continue;
+        const Suit suit = card->intrinsic_suits().front();
+        if (suit == led) return true;
+        if (trump.has_value() && suit == *trump && void_in_led) return true;
+    }
+    return false;
+}
+
 auto partner_bomb_forced(const Position& position, const Suit led) -> bool
 {
+    const Seat partner_seat = partner_of(position.next_player());
+    const int step = position.direction() == Direction::Forward ? 1 : 3;
+    const Seat before_partner = static_cast<Seat>(
+        (static_cast<int>(partner_seat) + 4 - step) % 4);
+    // The partner is blocked out of the trick, so the bomb never comes out.
+    if (holds_block_of(position, before_partner, led, trump_of(position.contract()))) {
+        return false;
+    }
     const Seat partner = partner_of(position.next_player());
     const auto& hand = position.hand(partner);
     if (hand.empty()) return false;
@@ -572,22 +609,23 @@ auto dominates_bomb(const Position& position, const Card& card) -> bool
     return partner_bomb_forced(position, card.intrinsic_suits().front());
 }
 
-// The bomb in the partner's hand is a dormant liability: it costs a trick the
-// moment an opponent leads its suit and the partner is forced to follow with
-// it. That can only be prevented while we act before the partner in the same
-// trick, so the window closes as soon as the opponents get the lead.
-auto bomb_liability(const Position& position) -> double
+// A bomb sitting in our partner's hand is a dormant liability: it costs a trick
+// as soon as the opponents lead its suit while the bomb is the partner's only
+// card of that suit. It only materialises when the partner is actually made to
+// play, so a block card held by the seat before the partner cancels it.
+auto bomb_liability(const Position& position, const Seat our_partner) -> double
 {
-    const Seat leader = position.next_player();
-    const Seat partner = partner_of(leader);
-    // Only the side that is about to lead can force it, and only against us.
-    const auto& hand = position.hand(partner);
+    const auto& hand = position.hand(our_partner);
+    if (hand.empty()) return 0.0;
+    const int step = position.direction() == Direction::Forward ? 1 : 3;
+    const Seat before_partner = static_cast<Seat>(
+        (static_cast<int>(our_partner) + 4 - step) % 4);
     for (const CardId id : hand) {
         const Card* card = position.card(id);
         if (card == nullptr || card->kind() != CardKind::CherryBomb) continue;
         if (card->intrinsic_suits().size() != 1U) continue;
         const Suit suit = card->intrinsic_suits().front();
-        // The partner is forced only when the bomb is its only card of the suit.
+        // Forced only when the bomb is the partner's only card of the suit.
         std::size_t suit_cards = 0;
         for (const CardId other : hand) {
             const Card* held = position.card(other);
@@ -595,14 +633,19 @@ auto bomb_liability(const Position& position) -> double
             if (held->intrinsic_suits().front() == suit) ++suit_cards;
         }
         if (suit_cards != 1U) continue;
-        // Can the side on lead actually lead it?
-        std::size_t lead_suit_cards = 0;
+        // The side on lead has to be able to lead the suit.
+        const Seat leader = position.next_player();
+        bool leader_holds = false;
         for (const CardId other : position.hand(leader)) {
             const Card* held = position.card(other);
             if (held == nullptr || held->intrinsic_suits().size() != 1U) continue;
-            if (held->intrinsic_suits().front() == suit) ++lead_suit_cards;
+            if (held->intrinsic_suits().front() == suit) leader_holds = true;
         }
-        if (lead_suit_cards == 0U) continue;
+        if (!leader_holds) continue;
+        // A block in front of the partner suppresses the bomb entirely.
+        if (holds_block_of(position, before_partner, suit, trump_of(position.contract()))) {
+            continue;
+        }
         return 1.0;
     }
     return 0.0;
@@ -635,10 +678,10 @@ auto trick_value(const Position& position, const Action& lead) -> double
     const Seat leader = copy.next_player();
     const bool we_lead = leader == me || leader == partner;
     value += (we_lead ? 1.0 : -1.0) * 0.35 * quality;
-    // If the opponents take the lead with the partner still holding a forced
+    // If the opponents take the lead with our partner still holding a forced
     // bomb, that bomb is worth a trick to them unless we covered it here.
     if (!we_lead) {
-        value -= bomb_liability(copy);
+        value -= bomb_liability(copy, partner);
     }
     return value;
 }
