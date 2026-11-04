@@ -381,6 +381,7 @@ auto full_info_lead(const Position& position, const ActionList& legal) -> Action
     // Highest live card per suit, and who holds it.
     std::array<std::optional<Rank>, 4> top_rank{};
     std::array<Seat, 4> top_seat{};
+    std::array<const Card*, 4> top_card{};
     std::array<bool, 4> partner_void{};
     std::array<bool, 4> opponent_void{};
     std::array<int, 4> length{};
@@ -404,6 +405,7 @@ auto full_info_lead(const Position& position, const ActionList& legal) -> Action
             if (!top_rank[suit].has_value() || card->rank() > *top_rank[suit]) {
                 top_rank[suit] = card->rank();
                 top_seat[suit] = other;
+                top_card[suit] = card;
             }
             if (opponent_has_trump[suit] && other != me && other != partner) {
                 opponent_void[suit] = false;   // it has a card of the suit
@@ -444,7 +446,12 @@ auto full_info_lead(const Position& position, const ActionList& legal) -> Action
             static_cast<std::size_t>(card->intrinsic_suits().front());
         if (suit >= 4U) continue;
         double score = 0.0;
-        const bool top_is_ours = top_rank[suit].has_value() &&
+        // A cherry bomb outranks every ordinary card but hands the trick to the
+        // seat after the thrower, so holding the top bomb is not cashing.
+        const bool top_is_bomb =
+            top_card[suit] != nullptr &&
+            top_card[suit]->kind() == CardKind::CherryBomb;
+        const bool top_is_ours = !top_is_bomb && top_rank[suit].has_value() &&
             (top_seat[suit] == me || top_seat[suit] == partner);
         // Cashing a suit our side controls is worth a lot; leading a suit the
         // opponents control gives a trick away.
@@ -456,6 +463,10 @@ auto full_info_lead(const Position& position, const ActionList& legal) -> Action
         // Prefer short suits when the partner can ruff and long suits when we
         // are establishing.
         score += 0.1 * static_cast<double>(length[suit]);
+        // Do not throw the functional cards away as leads: a bomb gives the
+        // trick to the next seat and a +2 hands the next seat two cards.
+        if (card->kind() == CardKind::CherryBomb) score -= 2.5;
+        if (card->kind() == CardKind::PlusTwo) score -= 1.5;
         // Inside the chosen suit: cash the highest card when our side holds the
         // top, otherwise lead low. That is what the blind rule gets right.
         const bool want_high = top_is_ours;
