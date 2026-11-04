@@ -25,16 +25,14 @@ public:
     auto operator<=>(const Action&) const = default;
 
 private:
-    Action(
-        std::optional<CardId> card_id,
-        std::optional<PlayMode> mode,
-        std::optional<Suit> effective_suit
-    );
-
-    std::optional<CardId> card_id_;
-    std::optional<PlayMode> mode_;
-    std::optional<Suit> effective_suit_;
+    // Bit 0 marks PASS, bits 8..15 hold the play mode and bits 16..23 the
+    // effective suit. Packing keeps Action at 16 bytes because every move list
+    // entry, trick play and transposition entry copies one.
+    std::uint64_t card_ = 0;
+    std::uint32_t flags_ = 1U;
 };
+
+static_assert(sizeof(Action) == 16, "Action must stay packed");
 
 struct TrickPlay {
     Seat seat;

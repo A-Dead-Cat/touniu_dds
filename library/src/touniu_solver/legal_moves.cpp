@@ -116,45 +116,48 @@ void lead_actions_into(
 
 }  // namespace
 
-Action::Action(
-    std::optional<CardId> card_id,
-    std::optional<PlayMode> mode,
-    std::optional<Suit> effective_suit)
-    : card_id_(card_id),
-      mode_(mode),
-      effective_suit_(effective_suit)
-{
-}
-
 auto Action::play(const CardId card_id, const PlayMode mode, const Suit effective_suit)
     -> Action
 {
-    return Action(card_id, mode, effective_suit);
+    Action action;
+    action.card_ = card_id.value;
+    action.flags_ = (static_cast<std::uint32_t>(mode) << 8U) |
+        (static_cast<std::uint32_t>(effective_suit) << 16U);
+    return action;
 }
 
 auto Action::pass() -> Action
 {
-    return Action(std::nullopt, std::nullopt, std::nullopt);
+    return Action{};
 }
 
 auto Action::is_pass() const -> bool
 {
-    return !card_id_.has_value();
+    return (flags_ & 1U) != 0U;
 }
 
 auto Action::card_id() const -> std::optional<CardId>
 {
-    return card_id_;
+    if (is_pass()) {
+        return std::nullopt;
+    }
+    return CardId{card_};
 }
 
 auto Action::mode() const -> std::optional<PlayMode>
 {
-    return mode_;
+    if (is_pass()) {
+        return std::nullopt;
+    }
+    return static_cast<PlayMode>((flags_ >> 8U) & 0xFFU);
 }
 
 auto Action::effective_suit() const -> std::optional<Suit>
 {
-    return effective_suit_;
+    if (is_pass()) {
+        return std::nullopt;
+    }
+    return static_cast<Suit>((flags_ >> 16U) & 0xFFU);
 }
 
 void legal_actions_into(
