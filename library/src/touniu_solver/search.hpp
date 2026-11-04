@@ -37,6 +37,7 @@ struct SearchStats {
     std::uint64_t equivalence_blocked_special = 0;
     std::uint64_t equivalence_blocked_interval = 0;
     std::uint64_t table_replacements = 0;
+    std::uint64_t forced_nodes = 0;
 };
 
 struct SearchOptions {
@@ -58,6 +59,9 @@ struct SearchOptions {
     // sequence, so positions that only differ by interchangeable cards share
     // an entry. Set to false to compare against the exact CardId identity.
     bool use_shareable_identity = true;
+    // Follow a run of single-legal-action positions without searching each
+    // link: the value of a forced position is the value of its only child.
+    bool use_forced_chain = true;
 };
 
 struct SearchResult {

@@ -126,6 +126,12 @@ choice when a card can legally be played.
   alpha-beta and stored bounds stay internal to the search, sibling cutoffs never
   narrow another action's window, and only an exact result is reported as that
   action's value.
+- A position with exactly one legal action is followed through without its own
+  table probe or window check: the value of a forced position is the value of
+  its only child, so the search walks up to 64 links, evaluates the position
+  the chain reaches, and unwinds them in reverse. Forced links are not counted
+  as nodes and carry no table entry. `SearchOptions::use_forced_chain` turns
+  the walk off for A/B runs.
 - Interior nodes use PVS over a deterministic move order (table best action,
   then the ply's main-variation action, then the two killers, then the canonical
   legal order). Per-action analysis converges with MTD(f) null-window probes.

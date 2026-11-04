@@ -386,10 +386,48 @@ private:
         return {lower, Bound::Exact};
     }
 
+    // A position with exactly one legal action has nothing to choose, so the
+    // search can follow the forced chain without a table probe or a window
+    // check per link. The chain stops as soon as a position branches, ends, or
+    // hits the safety cap, and every applied action is undone in reverse.
+    auto apply_forced_chain(Position& position) -> std::uint32_t
+    {
+        std::uint32_t applied = 0;
+        while (applied < 64U && !position.is_finished()) {
+            ActionList& actions = buffer(position);
+            position.legal_actions_into(actions);
+            if (actions.size() != 1U) {
+                break;
+            }
+            position.apply_known_legal(actions.front());
+            ++applied;
+        }
+        return applied;
+    }
+
+    void undo_forced_chain(Position& position, std::uint32_t applied)
+    {
+        while (applied > 0U) {
+            position.undo();
+            --applied;
+        }
+    }
+
     auto evaluate(Position& position, int alpha, int beta) -> SearchValue
     {
         if (options_.stats != nullptr) {
             ++options_.stats->nodes;
+        }
+        if (options_.use_forced_chain) {
+            const std::uint32_t chain = apply_forced_chain(position);
+            if (chain > 0U) {
+                if (options_.stats != nullptr) {
+                    options_.stats->forced_nodes += chain;
+                }
+                const SearchValue chained = evaluate(position, alpha, beta);
+                undo_forced_chain(position, chain);
+                return chained;
+            }
         }
         int low = score_ns(position);
         int high = low + static_cast<int>(position.tricks_remaining());
@@ -469,6 +507,17 @@ private:
             return {low, Bound::Lower};
         }
 
+        if (options_.use_forced_chain) {
+            const std::uint32_t chain = apply_forced_chain(position);
+            if (chain > 0U) {
+                if (options_.stats != nullptr) {
+                    options_.stats->forced_nodes += chain;
+                }
+                const SearchValue chained = evaluate(position, alpha, beta);
+                undo_forced_chain(position, chain);
+                return chained;
+            }
+        }
         const ChildResult result =
             search_children(position, alpha, beta, low, high, cached);
         store_value(

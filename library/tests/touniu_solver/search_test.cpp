@@ -145,10 +145,12 @@ TEST(SearchTest, SharedActionAnalysisMatchesTheOracle)
     auto position = *Position::create(scenario);
     SearchStats stats;
 
+    SearchOptions options{true, true, &stats};
+    // This fixture checks that the shared table is probed at all, so keep the
+    // forced chain out of the picture.
+    options.use_forced_chain = false;
     const std::vector<ActionAnalysis> analyses = analyze_actions(
-        position,
-        Partnership::NorthSouth,
-        SearchOptions{true, true, &stats});
+        position, Partnership::NorthSouth, options);
 
     ASSERT_FALSE(analyses.empty());
     EXPECT_GT(stats.nodes, 0U);
