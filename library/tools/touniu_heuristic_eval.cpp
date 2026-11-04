@@ -528,24 +528,48 @@ auto lead_quality(const Position& position) -> double
     return score;
 }
 
-// Leading a non-bomb rank-15 card before a bomb dominates it: ties go to the
-// earlier card, so the bomb no longer wins and its redirect never happens. A
-// bomb is a liability for whoever holds it, including the partner, because
-// throwing one hands the trick to the seat after the thrower.
+// A rank-15 card played earlier in the trick stops a later bomb from winning,
+// so the bomb's redirect never happens. That only helps when the bomb belongs
+// to the partner and the partner is about to be forced to play it: throwing it
+// would otherwise hand the trick to the seat after them, which is an opponent.
+// Against an opponent's bomb it is wasted work - their bomb already gives us
+// the trick - so the rule must not spend a 15 there.
+auto partner_bomb_forced(const Position& position, const Suit led) -> bool
+{
+    const Seat partner = partner_of(position.next_player());
+    const auto& hand = position.hand(partner);
+    if (hand.empty()) return false;
+    bool saw_bomb = false;
+    std::size_t suit_cards = 0;
+    std::size_t others = 0;
+    for (const CardId id : hand) {
+        const Card* card = position.card(id);
+        if (card == nullptr) continue;
+        const bool bomb = card->kind() == CardKind::CherryBomb;
+        const bool in_suit = card->intrinsic_suits().size() == 1U &&
+            card->intrinsic_suits().front() == led;
+        if (bomb && in_suit) {
+            saw_bomb = true;
+            ++suit_cards;
+        } else if (in_suit) {
+            ++suit_cards;
+        } else {
+            ++others;
+        }
+    }
+    if (!saw_bomb) return false;
+    // Forced either because it is the only card left, or because it is the only
+    // card the partner holds in the suit being led and following is mandatory.
+    if (hand.size() == 1U) return true;
+    return suit_cards == 1U && others > 0;
+}
+
 auto dominates_bomb(const Position& position, const Card& card) -> bool
 {
     if (card.rank().millionths() < 15 * 1'000'000) return false;
     if (card.kind() == CardKind::CherryBomb) return false;
-    const Seat me = position.next_player();
-    for (int seat = 0; seat < 4; ++seat) {
-        const Seat other = static_cast<Seat>(seat);
-        if (other == me) continue;
-        for (const CardId id : position.hand(other)) {
-            const Card* held = position.card(id);
-            if (held != nullptr && held->kind() == CardKind::CherryBomb) return true;
-        }
-    }
-    return false;
+    if (card.intrinsic_suits().size() != 1U) return false;
+    return partner_bomb_forced(position, card.intrinsic_suits().front());
 }
 
 // Play a candidate lead out with all four hands, score the trick, then add a
