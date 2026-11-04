@@ -473,7 +473,10 @@ auto full_info_lead(
             (top_seat[suit] == me || top_seat[suit] == partner);
         // Cashing a suit our side controls is worth a lot; leading a suit the
         // opponents control gives a trick away.
-        score += top_is_ours ? 3.0 : -1.0;
+        // Cashing a top card is only worth it when there is a suit left behind
+        // it; a lone honour is one trick and hands the lead back.
+        const double cash = top_seat[suit] == me && length[suit] >= 3U ? 3.0 : 2.0;
+        score += top_is_ours ? cash : -1.0;
         // A ruff for the partner is nearly as good; a ruff for an opponent is
         // the worst thing a lead can do.
         if (partner_void[suit] && partner_has_trump[suit]) score += 2.0;
@@ -487,7 +490,10 @@ auto full_info_lead(
         if (card->kind() == CardKind::PlusTwo) score -= 1.5;
         // Inside the chosen suit: cash the highest card when our side holds the
         // top, otherwise lead low. That is what the blind rule gets right.
-        const bool want_high = top_is_ours;
+        // Cash only a top card we own. When the partner holds the top, leading
+        // low hands the lead to the partner's winner and keeps ours in hand,
+        // which is the transfer the double-dummy line takes.
+        const bool want_high = top_is_ours && top_seat[suit] == me;
         const bool better_card = best_card == nullptr ||
             (want_high ? card->rank() > best_card->rank()
                        : card->rank() < best_card->rank());
@@ -859,6 +865,39 @@ auto suit_run_balance(const Position& position, const int suit_code) -> int
         balance += ours ? 1 : -1;
     }
     return balance;
+}
+
+// Winners our side still has in this suit after the trick, counting only cards
+// that beat every card the opponents hold in it. This is what "give first, take
+// later" buys: driving out their stopper promotes the leftovers.
+auto promoted_side_winners(
+    const Position& position,
+    const int suit_code,
+    const Seat me) -> int
+{
+    const Seat partner = partner_of(me);
+    long long opponents_best = -1;
+    for (int seat = 0; seat < 4; ++seat) {
+        const Seat other = static_cast<Seat>(seat);
+        if (other == me || other == partner) continue;
+        for (const CardId id : position.hand(other)) {
+            const Card* card = position.card(id);
+            if (card == nullptr || !in_suit(*card, suit_code)) continue;
+            opponents_best = std::max<long long>(
+                opponents_best, effective_rank_micro(position, card));
+        }
+    }
+    int winners = 0;
+    for (int seat = 0; seat < 4; ++seat) {
+        const Seat other = static_cast<Seat>(seat);
+        if (other != me && other != partner) continue;
+        for (const CardId id : position.hand(other)) {
+            const Card* card = position.card(id);
+            if (card == nullptr || !in_suit(*card, suit_code)) continue;
+            if (effective_rank_micro(position, card) > opponents_best) ++winners;
+        }
+    }
+    return winners;
 }
 
 auto trick_value(const Position& position, const Action& lead) -> double
