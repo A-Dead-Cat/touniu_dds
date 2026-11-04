@@ -370,14 +370,9 @@ TEST(SearchTest, EquivalentPredicateRejectsGapsAndMismatches)
     ASSERT_TRUE(suits_position.has_value());
     EXPECT_FALSE(actions_are_equivalent(*suits_position, lead_action(1), lead_action(2)));
 
-    // A remaining +2 could generate a rank between the candidates.
-    Scenario plus_two = equivalence_scenario();
-    plus_two.hands[1] = {
-        Card::plus_two(CardId{3}, Suit::Spades),
-    };
-    const auto plus_two_position = Position::create(plus_two);
-    ASSERT_TRUE(plus_two_position.has_value());
-    EXPECT_FALSE(actions_are_equivalent(*plus_two_position, lead_action(1), lead_action(2)));
+    // A +2 in a hand no longer blocks every pair: only a card the deal can
+    // actually still draw inside the gap does. PositionTest covers both
+    // directions of that decision.
 
     // A special or multi-suit card whose rank sits inside the gap (or on an
     // endpoint) still distinguishes the two candidates.
@@ -408,6 +403,19 @@ TEST(SearchTest, EquivalentPredicateRejectsGapsAndMismatches)
     ASSERT_TRUE(floating_position.has_value());
     EXPECT_FALSE(
         actions_are_equivalent(*floating_position, lead_action(1), lead_action(2)));
+}
+
+TEST(SearchTest, EquivalentPredicateIgnoresOffSuitMiddleRanks)
+{
+    // A heart rank between two spade candidates never changes which of them
+    // wins: it loses to both, or beats both when hearts are trump.
+    Scenario scenario = equivalence_scenario();
+    scenario.hands[1] = {
+        Card::floating(CardId{3}, Suit::Hearts, *Rank::floating(8'500'000)),
+    };
+    const auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    EXPECT_TRUE(actions_are_equivalent(*position, lead_action(1), lead_action(2)));
 }
 
 TEST(SearchTest, EquivalentPredicateAllowsSpecialsOutsideTheGap)

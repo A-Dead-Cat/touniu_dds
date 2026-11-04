@@ -123,6 +123,7 @@ enum class EquivalenceBlock {
     Rank,
     Special,
     NonPlain,
+    Interval,
 };
 
 // Decides whether `right` can reuse the value already computed for `left`.
@@ -153,6 +154,11 @@ auto equivalence_block(
     if (!is_plain_card(*left_card) || !is_plain_card(*right_card) ||
         left_card->intrinsic_suits() != right_card->intrinsic_suits()) {
         return EquivalenceBlock::Candidate;
+    }
+
+    if (wide && position.has_equivalence_universe()) {
+        return position.equivalent_actions(left, right)
+            ? EquivalenceBlock::None : EquivalenceBlock::Interval;
     }
 
     const Card& low = left_card->rank() < right_card->rank()
@@ -513,6 +519,9 @@ private:
                             case EquivalenceBlock::Special:
                             case EquivalenceBlock::NonPlain:
                                 ++options_.stats->equivalence_blocked_special;
+                                break;
+                            case EquivalenceBlock::Interval:
+                                ++options_.stats->equivalence_blocked_interval;
                                 break;
                             case EquivalenceBlock::None:
                                 break;

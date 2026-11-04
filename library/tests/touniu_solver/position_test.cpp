@@ -588,5 +588,48 @@ TEST(PositionTest, NoTrumpSuitPlusTwoDiscardsWithoutDrawingAndWinsAsTrump)
     EXPECT_EQ(position->tricks_won(Seat::North), 1U);
 }
 
+TEST(PositionTest, EquivalenceUniverseAccountsForPossibleDraws)
+{
+    Scenario generator_scenario;
+    generator_scenario.seed = 0;
+    auto generator = *State::create(generator_scenario);
+    const Card predicted = generator.draw_floating(Seat::North);
+    const Suit suit = predicted.intrinsic_suits().front();
+    const std::int32_t rank = predicted.rank().millionths();
+    ASSERT_GT(rank, 1'000'002);
+    ASSERT_LT(rank, 14'999'997);
+
+    const auto scenario_for = [&](const std::int32_t low, const std::int32_t high) {
+        Scenario scenario;
+        scenario.next_player = Seat::West;
+        scenario.contract = Contract::NoTrump;
+        scenario.tricks_remaining = 1;
+        scenario.seed = 0;
+        scenario.hands[static_cast<int>(Seat::West)] = {
+            Card::floating(CardId{1}, suit, *Rank::floating(low)),
+            Card::floating(CardId{2}, suit, *Rank::floating(high)),
+            Card::plus_two(CardId{3}, Suit::Hearts),
+        };
+        return scenario;
+    };
+
+    // The predicted card sits strictly between these two candidates, so they
+    // are not interchangeable even though they are adjacent right now.
+    auto straddling = Position::create(scenario_for(rank - 1, rank + 1));
+    ASSERT_TRUE(straddling.has_value());
+    EXPECT_TRUE(straddling->has_equivalence_universe());
+    EXPECT_FALSE(straddling->equivalent_actions(
+        Action::play(CardId{1}, PlayMode::Lead, suit),
+        Action::play(CardId{2}, PlayMode::Lead, suit)));
+
+    // A one-millionth gap can never contain another rank, so the pair stays
+    // interchangeable while the same +2 is still in the hand.
+    auto adjacent = Position::create(scenario_for(14'999'998, 14'999'999));
+    ASSERT_TRUE(adjacent.has_value());
+    EXPECT_TRUE(adjacent->equivalent_actions(
+        Action::play(CardId{1}, PlayMode::Lead, suit),
+        Action::play(CardId{2}, PlayMode::Lead, suit)));
+}
+
 }  // namespace
 }  // namespace touniu_solver

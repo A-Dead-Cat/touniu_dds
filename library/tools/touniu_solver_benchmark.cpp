@@ -401,6 +401,7 @@ int main(int argc, char** argv)
         totals.equivalence_blocked_plus_two += stats.equivalence_blocked_plus_two;
         totals.equivalence_blocked_rank += stats.equivalence_blocked_rank;
         totals.equivalence_blocked_special += stats.equivalence_blocked_special;
+        totals.equivalence_blocked_interval += stats.equivalence_blocked_interval;
         totals.table_replacements += stats.table_replacements;
     }
 
@@ -418,6 +419,7 @@ int main(int argc, char** argv)
         "\"equivalence_blocked_plus_two\":%llu,"
         "\"equivalence_blocked_rank\":%llu,"
         "\"equivalence_blocked_special\":%llu,"
+        "\"equivalence_blocked_interval\":%llu,"
         "\"table_replacements\":%llu,"
         "\"samples_nodes\":[",
         args.cards,
@@ -444,6 +446,7 @@ int main(int argc, char** argv)
         static_cast<unsigned long long>(totals.equivalence_blocked_plus_two),
         static_cast<unsigned long long>(totals.equivalence_blocked_rank),
         static_cast<unsigned long long>(totals.equivalence_blocked_special),
+        static_cast<unsigned long long>(totals.equivalence_blocked_interval),
         static_cast<unsigned long long>(totals.table_replacements));
     for (std::size_t index = 0; index < sample_nodes.size(); ++index) {
         std::printf("%s%llu", index == 0 ? "" : ",", sample_nodes[index]);

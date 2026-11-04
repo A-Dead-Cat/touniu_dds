@@ -35,6 +35,7 @@ struct SearchStats {
     std::uint64_t equivalence_blocked_plus_two = 0;
     std::uint64_t equivalence_blocked_rank = 0;
     std::uint64_t equivalence_blocked_special = 0;
+    std::uint64_t equivalence_blocked_interval = 0;
     std::uint64_t table_replacements = 0;
 };
 

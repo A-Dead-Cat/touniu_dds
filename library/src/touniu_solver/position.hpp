@@ -51,6 +51,16 @@ public:
     // equals recompute_position_identity(), which stays as the test oracle.
     [[nodiscard]] auto identity() const -> const PositionIdentity&;
 
+    // Wide equivalence support. The deal universe is the live cards plus every
+    // floating card this deal can still draw (the +2 count is fixed and the
+    // draw sequence is play-order independent), so two plain cards of one suit
+    // are interchangeable exactly when no live-or-possible card sits inside
+    // their closed rank interval.
+    [[nodiscard]] auto has_equivalence_universe() const -> bool;
+    [[nodiscard]] auto equivalent_actions(
+        const Action& left,
+        const Action& right) const -> bool;
+
 private:
     friend auto recompute_position_identity(const Position& position)
         -> PositionIdentity;
@@ -68,6 +78,7 @@ private:
         std::optional<Seat> previous_pending_block;
         std::uint32_t previous_valid_reverse_count = 0;
         std::array<std::uint32_t, 4> previous_tricks_won{};
+        std::array<std::uint64_t, 4> previous_live_mask{};
         PositionIdentity previous_identity;
         Seat draw_target = Seat::West;
         std::vector<CardId> drawn_cards;
@@ -95,12 +106,35 @@ private:
     [[nodiscard]] auto identity_input() const -> identity_tokens::IdentityInput;
     void refresh_identity();
 
+    struct UniverseCard {
+        std::uint64_t id = 0;
+        std::uint8_t suit_count = 0;
+        std::array<std::uint8_t, 4> suits{};
+        std::array<std::uint8_t, 4> bits{};
+    };
+    struct EquivalenceUniverse {
+        bool enabled = false;
+        std::array<std::vector<std::pair<std::int32_t, std::uint8_t>>, 4> ranks;
+        std::array<std::vector<std::uint64_t>, 4> prefix_masks;
+        std::array<std::uint64_t, 4> masks{};
+        std::vector<UniverseCard> cards;
+        std::vector<std::uint64_t> predicted_ids;
+    };
+    void rebuild_universe();
+    void retire_trick_cards(const Trick& trick);
+    void prune_reached_predictions();
+    [[nodiscard]] auto universe_bit(CardId id, Suit suit) const
+        -> std::optional<std::uint8_t>;
+    [[nodiscard]] auto universe_card(std::uint64_t id) -> UniverseCard*;
+
     State state_;
     Trick current_trick_;
     std::optional<Seat> pending_block_;
     std::uint32_t valid_reverse_count_ = 0;
     std::array<std::uint32_t, 4> tricks_won_{};
     PositionIdentity identity_;
+    EquivalenceUniverse universe_;
+    std::array<std::uint64_t, 4> live_mask_{};
     std::vector<UndoRecord> undo_stack_;
 };
 

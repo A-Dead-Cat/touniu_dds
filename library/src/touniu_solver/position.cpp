@@ -82,6 +82,7 @@ auto matches_live_position(const Position& position, const LivePosition& live) -
 Position::Position(State state) : state_(std::move(state))
 {
     refresh_identity();
+    rebuild_universe();
 }
 
 auto Position::create(const Scenario& scenario) -> std::optional<Position>
@@ -144,6 +145,7 @@ auto Position::create(const LivePosition& live) -> std::optional<Position>
         return std::nullopt;
     }
     replay.refresh_identity();
+    replay.rebuild_universe();
     replay.undo_stack_.clear();
     return replay;
 }
@@ -251,6 +253,295 @@ auto recompute_position_identity(const Position& position) -> PositionIdentity
     return identity_tokens::build_identity(position.identity_input());
 }
 
+namespace {
+
+auto is_plain_single_suit(const Card& card) -> bool
+{
+    return (card.kind() == CardKind::Normal || card.kind() == CardKind::Floating) &&
+           card.intrinsic_suits().size() == 1U;
+}
+
+auto suit_index(const Suit suit) -> std::size_t
+{
+    return static_cast<std::size_t>(suit);
+}
+
+}  // namespace
+
+auto Position::has_equivalence_universe() const -> bool
+{
+    return universe_.enabled;
+}
+
+auto Position::universe_bit(const CardId id, const Suit suit) const
+    -> std::optional<std::uint8_t>
+{
+    const auto found = std::lower_bound(
+        universe_.cards.begin(),
+        universe_.cards.end(),
+        id.value,
+        [](const UniverseCard& card, const std::uint64_t value) {
+            return card.id < value;
+        });
+    if (found == universe_.cards.end() || found->id != id.value) {
+        return std::nullopt;
+    }
+    for (std::uint8_t index = 0; index < found->suit_count; ++index) {
+        if (found->suits[index] == static_cast<std::uint8_t>(suit)) {
+            return found->bits[index];
+        }
+    }
+    return std::nullopt;
+}
+
+auto Position::universe_card(const std::uint64_t id) -> UniverseCard*
+{
+    const auto found = std::lower_bound(
+        universe_.cards.begin(),
+        universe_.cards.end(),
+        id,
+        [](const UniverseCard& card, const std::uint64_t value) {
+            return card.id < value;
+        });
+    if (found == universe_.cards.end() || found->id != id) {
+        return nullptr;
+    }
+    return &*found;
+}
+
+void Position::rebuild_universe()
+{
+    universe_ = EquivalenceUniverse{};
+    live_mask_ = {};
+
+    std::size_t plus_two_count = 0;
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+            const Card* card = state_.card(id);
+            if (card != nullptr && card->kind() == CardKind::PlusTwo) {
+                ++plus_two_count;
+            }
+        }
+    }
+
+    // The draw sequence is a deterministic function of the seed, the draw
+    // cursor and the cards already present, so simulating it here yields every
+    // floating card this deal can still produce, in every play order.
+    std::vector<Card> predicted;
+    if (plus_two_count > 0) {
+        State generator = state_;
+        const std::size_t limit = plus_two_count * 2U;
+        predicted.reserve(limit);
+        for (std::size_t index = 0; index < limit; ++index) {
+            predicted.push_back(generator.draw_floating(Seat::West));
+            universe_.predicted_ids.push_back(predicted.back().id().value);
+        }
+    }
+
+    std::vector<CardId> live;
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+            live.push_back(id);
+        }
+    }
+    for (const TrickPlay& play : current_trick_) {
+        if (!play.action.is_pass()) {
+            live.push_back(*play.action.card_id());
+        }
+    }
+
+    std::array<std::vector<std::pair<std::int32_t, std::uint64_t>>, 4> entries;
+    const auto add_capable = [&entries](const Card& card) {
+        const auto rank = card.rank().millionths();
+        const std::uint64_t id = card.id().value;
+        if (is_plain_single_suit(card)) {
+            entries[suit_index(card.intrinsic_suits().front())].push_back({rank, id});
+            return;
+        }
+        if (card.kind() == CardKind::BigJoker || card.kind() == CardKind::SmallJoker) {
+            return;
+        }
+        if (card.intrinsic_suits().size() == 4U ||
+            card.kind() == CardKind::ThreeSuitCat) {
+            for (std::size_t suit = 0; suit < 4; ++suit) {
+                entries[suit].push_back({rank, id});
+            }
+            return;
+        }
+        if (card.intrinsic_suits().size() == 1U &&
+            card.intrinsic_suits().front() != Suit::NoTrump) {
+            entries[suit_index(card.intrinsic_suits().front())].push_back({rank, id});
+        }
+    };
+
+    for (const CardId id : live) {
+        const Card* card = state_.card(id);
+        if (card != nullptr) {
+            add_capable(*card);
+        }
+    }
+    for (const Card& card : predicted) {
+        add_capable(card);
+    }
+
+    for (std::size_t suit = 0; suit < 4; ++suit) {
+        std::vector<std::pair<std::int32_t, std::uint64_t>>& list = entries[suit];
+        std::sort(list.begin(), list.end());
+        list.erase(
+            std::unique(
+                list.begin(),
+                list.end(),
+                [](const auto& left, const auto& right) {
+                    return left.second == right.second;
+                }),
+            list.end());
+        if (list.size() > 64U) {
+            universe_ = EquivalenceUniverse{};
+            live_mask_ = {};
+            return;
+        }
+        universe_.ranks[suit].resize(list.size());
+        for (std::size_t index = 0; index < list.size(); ++index) {
+            universe_.ranks[suit][index] = {
+                list[index].first, static_cast<std::uint8_t>(index)};
+            {
+                UniverseCard card;
+                card.id = list[index].second;
+                const auto position = std::lower_bound(
+                    universe_.cards.begin(),
+                    universe_.cards.end(),
+                    card.id,
+                    [](const UniverseCard& existing, const std::uint64_t value) {
+                        return existing.id < value;
+                    });
+                universe_.cards.insert(position, card);
+            }
+        }
+        universe_.prefix_masks[suit].assign(list.size() + 1U, 0U);
+        for (std::size_t index = 0; index < list.size(); ++index) {
+            universe_.prefix_masks[suit][index + 1U] =
+                universe_.prefix_masks[suit][index] |
+                (std::uint64_t{1} << static_cast<std::uint8_t>(index));
+        }
+        universe_.masks[suit] = universe_.prefix_masks[suit].back();
+    }
+
+    for (std::size_t suit = 0; suit < 4; ++suit) {
+        for (std::size_t index = 0; index < entries[suit].size(); ++index) {
+            UniverseCard* card = universe_card(entries[suit][index].second);
+            const std::size_t slot = card->suit_count;
+            card->suits[slot] = static_cast<std::uint8_t>(suit);
+            card->bits[slot] = static_cast<std::uint8_t>(index);
+            card->suit_count = static_cast<std::uint8_t>(slot + 1U);
+        }
+    }
+
+    live_mask_ = universe_.masks;
+    universe_.enabled = true;
+}
+
+void Position::retire_trick_cards(const Trick& trick)
+{
+    if (!universe_.enabled) {
+        return;
+    }
+    for (const TrickPlay& play : trick) {
+        if (play.action.is_pass()) {
+            continue;
+        }
+        UniverseCard* card = universe_card(play.action.card_id()->value);
+        if (card == nullptr) {
+            continue;
+        }
+        for (std::uint8_t index = 0; index < card->suit_count; ++index) {
+            live_mask_[card->suits[index]] &=
+                ~(std::uint64_t{1} << card->bits[index]);
+        }
+    }
+}
+
+void Position::prune_reached_predictions()
+{
+    if (!universe_.enabled || universe_.predicted_ids.empty()) {
+        return;
+    }
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+            const Card* card = state_.card(id);
+            if (card != nullptr && card->kind() == CardKind::PlusTwo) {
+                return;
+            }
+        }
+    }
+    // No +2 can generate anything any more; predicted cards that never appeared
+    // will never appear, so their bits can stop blocking merges.
+    for (const std::uint64_t id : universe_.predicted_ids) {
+        if (state_.card(CardId{id}) != nullptr) {
+            continue;
+        }
+        UniverseCard* card = universe_card(id);
+        if (card == nullptr) {
+            continue;
+        }
+        for (std::uint8_t index = 0; index < card->suit_count; ++index) {
+            live_mask_[card->suits[index]] &=
+                ~(std::uint64_t{1} << card->bits[index]);
+        }
+    }
+}
+
+auto Position::equivalent_actions(const Action& left, const Action& right) const
+    -> bool
+{
+    if (!universe_.enabled || left.is_pass() || right.is_pass() ||
+        left.mode() != right.mode() ||
+        left.effective_suit() != right.effective_suit()) {
+        return false;
+    }
+    const Card* left_card = state_.card(*left.card_id());
+    const Card* right_card = state_.card(*right.card_id());
+    if (left_card == nullptr || right_card == nullptr ||
+        !is_plain_single_suit(*left_card) ||
+        !is_plain_single_suit(*right_card) ||
+        left_card->intrinsic_suits() != right_card->intrinsic_suits()) {
+        return false;
+    }
+    const Suit suit = left_card->intrinsic_suits().front();
+    const std::optional<std::uint8_t> left_bit = universe_bit(left_card->id(), suit);
+    const std::optional<std::uint8_t> right_bit = universe_bit(right_card->id(), suit);
+    if (!left_bit.has_value() || !right_bit.has_value()) {
+        return false;
+    }
+
+    const auto rank_of = [](const Card& card) { return card.rank().millionths(); };
+    const std::int32_t low = std::min(rank_of(*left_card), rank_of(*right_card));
+    const std::int32_t high = std::max(rank_of(*left_card), rank_of(*right_card));
+    const std::vector<std::pair<std::int32_t, std::uint8_t>>& ranks =
+        universe_.ranks[suit_index(suit)];
+    const auto first = std::lower_bound(
+        ranks.begin(), ranks.end(), low,
+        [](const std::pair<std::int32_t, std::uint8_t>& entry, const std::int32_t value) {
+            return entry.first < value;
+        });
+    const auto last = std::upper_bound(
+        ranks.begin(), ranks.end(), high,
+        [](const std::int32_t value, const std::pair<std::int32_t, std::uint8_t>& entry) {
+            return value < entry.first;
+        });
+    const std::size_t first_index =
+        static_cast<std::size_t>(std::distance(ranks.begin(), first));
+    const std::size_t last_index =
+        static_cast<std::size_t>(std::distance(ranks.begin(), last));
+    // A prefix mask holds the bits below each index, so XOR isolates
+    // [first_index, last_index).
+    const std::uint64_t range =
+        universe_.prefix_masks[suit_index(suit)][last_index] ^
+        universe_.prefix_masks[suit_index(suit)][first_index];
+    const std::uint64_t excluded =
+        (std::uint64_t{1} << *left_bit) | (std::uint64_t{1} << *right_bit);
+    return (live_mask_[suit_index(suit)] & range & ~excluded) == 0;
+}
+
 auto Position::next_seat(const Seat seat) const -> Seat
 {
     const int value = static_cast<int>(seat);
@@ -294,6 +585,7 @@ void Position::apply_known_legal(const Action& action)
 {
     UndoRecord record;
     record.previous_identity = identity_;
+    record.previous_live_mask = live_mask_;
     record.player = state_.next_player();
     record.previous_next_player = record.player;
     record.previous_direction = state_.direction();
@@ -352,6 +644,7 @@ void Position::undo()
     pending_block_ = record.previous_pending_block;
     valid_reverse_count_ = record.previous_valid_reverse_count;
     tricks_won_ = record.previous_tricks_won;
+    live_mask_ = record.previous_live_mask;
     identity_ = record.previous_identity;
 
     undo_stack_.pop_back();
@@ -407,6 +700,7 @@ void Position::finish_trick(Trick* cleared_trick)
     if (cleared_trick != nullptr) {
         *cleared_trick = current_trick_;
     }
+    retire_trick_cards(current_trick_);
     const TrickResult result = resolve_trick(state_, current_trick_);
     add_tricks_won(result.winner);
     if (state_.tricks_remaining() > 0) {
@@ -556,6 +850,15 @@ auto Position::draw_floating(const Seat seat) -> Card
     const std::size_t previous_size = state_.hand(seat).size();
     const std::size_t previous_catalog = state_.cards().size();
     const Card card = state_.draw_floating(seat);
+    if (universe_.enabled) {
+        const Suit suit = card.intrinsic_suits().front();
+        if (!universe_bit(card.id(), suit).has_value()) {
+            // A card outside the predicted universe invalidates the bitmask
+            // shortcut; the search falls back to the reference predicate.
+            universe_.enabled = false;
+            live_mask_ = {};
+        }
+    }
 
     identity_tokens::combine(
         identity_, identity_tokens::DomainDrawIndex, previous_draw_index);

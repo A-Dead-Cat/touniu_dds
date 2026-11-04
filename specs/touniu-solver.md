@@ -131,15 +131,19 @@ choice when a card can legally be played.
   legal order). Per-action analysis converges with MTD(f) null-window probes.
   Ordering, history and bounds never change which legal actions exist, and an
   equal-valued tie still resolves to the earliest canonical action.
+- Each position precomputes the deal universe: the live cards (hands and the
+  current trick) plus every floating card the deal can still draw. The +2 count
+  is fixed and the draw sequence depends only on the seed, the draw cursor and
+  the cards already present, so this universe is exact for every play order.
 - Interior nodes may merge two plain cards that are indistinguishable for every
   remaining comparison: same single ordinary suit, same mode and effective suit,
-  and no plain card in any hand or in the current trick with a rank strictly
-  between them. A special or multi-suit card blocks the merge only when its rank
-  lies inside the candidates' rank interval (inclusive); a rank strictly outside
-  compares identically against both candidates whatever suit it is played as. A
-  `+2` still in a hand always blocks, because its future draws could land between
-  the candidates; a `+2` already played in the current trick has finished
-  drawing. The analysis root always reports every legal action.
+  and no live-or-possible card that can act as that suit with a rank inside the
+  candidates' closed rank interval. Cards of other suits, jokers and NoTrump-suit
+  cards compare identically against both candidates, and cards played in earlier
+  tricks cannot reappear. A `+2` only blocks through the ranks it can still
+  draw. The predicate is a per-suit rank mask over the precomputed universe, so
+  the check costs a few lookups instead of scanning every hand. The analysis
+  root always reports every legal action.
 - Imported positions may contain special cards whose single suit is NoTrump
   (`+2NT`, `🚫NT`, `🔄NT`, `🍒NT`), matching the Playground palette. In a
   no-trump contract such a card is trump for trick resolution; when it is not
