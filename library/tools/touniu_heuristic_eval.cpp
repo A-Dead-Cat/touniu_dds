@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <optional>
@@ -2205,10 +2206,20 @@ auto main(const int argc, char** argv) -> int
                 } else {
                     const ActionList legal_before = position->legal_actions();
                     (void) legal_before;
+                    const auto heur_start = std::chrono::steady_clock::now();
                     action = heuristic_action(
                     *position,
                     args.simulate ? 4 : (args.full_info ? 3 : args.lead_rule),
                     args.void_aware ? &tracker : nullptr);
+                    if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
+                        const auto heur_end = std::chrono::steady_clock::now();
+                        const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+                            heur_end - heur_start).count();
+                        std::fprintf(stderr, "heur cards=%d us=%lld%c",
+                                     static_cast<int>(position->tricks_remaining()),
+                                     static_cast<long long>(micros),
+                                     static_cast<char>(10));
+                    }
                     if (args.signals && action.has_value()) {
                         action = convention_pick(
                             *position,
