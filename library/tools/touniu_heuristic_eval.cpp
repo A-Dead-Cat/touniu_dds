@@ -103,6 +103,21 @@ auto xorshift32(std::uint32_t& state) -> std::uint32_t
     return value;
 }
 
+// Mirrors the Playground's guide deck: specials are rolled per kind and
+// *replace* ordinary cards, so the deck stays at fifty-two and every seat keeps
+// a thirteen-card hand. `specials` acts as a toggle (0 = plain deck).
+auto binomial_count(std::uint32_t& state, const int trials, const double mean) -> int
+{
+    const double probability = mean / static_cast<double>(trials);
+    int count = 0;
+    for (int trial = 0; trial < trials; ++trial) {
+        const double roll = static_cast<double>(xorshift32(state)) /
+            static_cast<double>(0xFFFFFFFFU);
+        if (roll < probability) ++count;
+    }
+    return count;
+}
+
 auto make_deck(const int specials) -> std::vector<Card>
 {
     const std::array<Suit, 4> suits{
@@ -114,32 +129,87 @@ auto make_deck(const int specials) -> std::vector<Card>
             deck.push_back(Card::normal(CardId{id++}, suit, Rank::integer(rank)));
         }
     }
-    if (specials <= 0) {
-        return deck;
+    if (specials <= 0) return deck;
+
+    std::uint32_t state = 0x5EED1234U;
+    auto shuffled_suits = [&]() {
+        std::array<Suit, 4> pool = suits;
+        for (int index = 3; index > 0; --index) {
+            const int other = static_cast<int>(xorshift32(state) %
+                static_cast<std::uint32_t>(index + 1));
+            std::swap(pool[static_cast<std::size_t>(index)],
+                      pool[static_cast<std::size_t>(other)]);
+        }
+        return pool;
+    };
+    int point_serial = 0;
+    auto unique_point = [&]() -> Rank {
+        ++point_serial;
+        const std::int32_t millionths =
+            1'000'000 + 100'000 + (point_serial * 7919) % 800'000;
+        const std::optional<Rank> rank = Rank::floating(millionths);
+        return rank.has_value() ? *rank : Rank::integer(2);
+    };
+
+    std::vector<Card> extras;
+    auto suit_bound = [&](const int count, const int kind) {
+        const std::array<Suit, 4> pool = shuffled_suits();
+        const int take = count < 4 ? count : 4;
+        for (int index = 0; index < take; ++index) {
+            const Suit suit = pool[static_cast<std::size_t>(index)];
+            switch (kind) {
+                case 0: extras.push_back(Card::block(CardId{id++}, suit)); break;
+                case 1: extras.push_back(Card::reverse(CardId{id++}, suit)); break;
+                case 2: extras.push_back(Card::plus_two(CardId{id++}, suit)); break;
+                default: extras.push_back(Card::cherry_bomb(CardId{id++}, suit)); break;
+            }
+        }
+    };
+
+    // Averages from GUIDE_SPECIAL_RULES in public/bridge-deal.js.
+    const int floating = binomial_count(state, 10, 6.0);
+    for (int index = 0; index < floating; ++index) {
+        const std::array<Suit, 4> pool = shuffled_suits();
+        const Rank rank = unique_point();
+        extras.push_back(Card::floating(CardId{id++}, pool[0], rank));
     }
-    const std::size_t base = deck.size();
-    for (const Suit suit : suits) {
-        deck.push_back(Card::block(CardId{id++}, suit));
-        deck.push_back(Card::reverse(CardId{id++}, suit));
-        deck.push_back(Card::plus_two(CardId{id++}, suit));
-        deck.push_back(Card::cherry_bomb(CardId{id++}, suit));
+    suit_bound(binomial_count(state, 2, 1.0), 2);   // draw-two
+    suit_bound(binomial_count(state, 2, 1.0), 0);   // block
+    suit_bound(binomial_count(state, 2, 1.0), 1);   // reverse
+    suit_bound(binomial_count(state, 2, 0.8), 3);   // cherry bomb
+    const int cats = binomial_count(state, 2, 0.8);
+    for (int index = 0; index < cats; ++index) {
+        extras.push_back(Card::three_suit_cat(CardId{id++}));
     }
-    for (const int rank : {5, 7, 9, 11}) {
-        deck.push_back(Card::four_suit(CardId{id++}, Rank::integer(rank)));
+    const int four = binomial_count(state, 4, 2.0);
+    for (int index = 0; index < four; ++index) {
+        extras.push_back(Card::four_suit(CardId{id++}, unique_point()));
     }
-    deck.push_back(Card::big_joker(CardId{id++}));
-    deck.push_back(Card::small_joker(CardId{id++}));
-    deck.push_back(Card::three_suit_cat(CardId{id++}));
-    for (const int rank : {4, 6, 8, 10, 12}) {
-        deck.push_back(Card::no_trump(CardId{id++}, Rank::integer(rank)));
+    const int no_trump = binomial_count(state, 4, 2.0);
+    for (int index = 0; index < no_trump; ++index) {
+        extras.push_back(Card::no_trump(CardId{id++}, unique_point()));
     }
-    if (static_cast<std::size_t>(specials) < deck.size() - base) {
-        deck.erase(
-            deck.begin() + static_cast<std::ptrdiff_t>(base + static_cast<std::size_t>(specials)),
-            deck.end());
+    const int jokers = binomial_count(state, 1, 0.6);
+    for (int index = 0; index < jokers; ++index) {
+        extras.push_back(index % 2 == 0
+            ? Card::big_joker(CardId{id++})
+            : Card::small_joker(CardId{id++}));
+    }
+
+    if (static_cast<std::size_t>(specials) < extras.size()) {
+        extras.erase(
+            extras.begin() + static_cast<std::ptrdiff_t>(specials), extras.end());
+    }
+    const std::size_t removable =
+        extras.size() < deck.size() ? extras.size() : deck.size();
+    // No resize: Card is not default-constructible.
+    deck.erase(deck.end() - static_cast<std::ptrdiff_t>(removable), deck.end());
+    for (std::size_t index = 0; index < extras.size(); ++index) {
+        deck.push_back(std::move(extras[index]));
     }
     return deck;
 }
+
 
 auto build_scenario(const Args& args, const std::uint32_t seed) -> Scenario
 {
