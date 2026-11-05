@@ -223,6 +223,14 @@ int32_t touniu_solver_heuristic_move_v5(
 
 
 /*
+ * ABI v5 warm-up: run the heuristic once on a throwaway position so the first
+ * real call does not pay the one-time initialisation (measured at ~2.8 s on the
+ * first call, microseconds after that). Returns 0 on success.
+ */
+int32_t touniu_solver_warm_up_v1(void);
+
+
+/*
  * Contract-table memory tier. It only changes how many slots the contract
  * transposition table keeps per Worker; cached values are unaffected.
  */

@@ -378,6 +378,25 @@ extern "C" auto touniu_solver_best_move_v4(
     return TOUNIU_SOLVER_OK;
 }
 
+extern "C" auto touniu_solver_warm_up_v1() -> std::int32_t
+{
+    Scenario scenario;
+    std::uint64_t id = 1;
+    for (int seat = 0; seat < 4; ++seat) {
+        scenario.hands[static_cast<std::size_t>(seat)].push_back(
+            Card::normal(CardId{id++}, Suit::Spades, Rank::integer(2 + seat)));
+        scenario.hands[static_cast<std::size_t>(seat)].push_back(
+            Card::normal(CardId{id++}, Suit::Hearts, Rank::integer(2 + seat)));
+    }
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    auto position = Position::create(scenario);
+    if (!position.has_value()) return -1;
+    (void) heuristic_choose(*position, 3);
+    return 0;
+}
+
 extern "C" auto touniu_solver_heuristic_move_v5(
     const TouniuAnalyzeRequest* request,
     std::int32_t policy,
