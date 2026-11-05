@@ -885,14 +885,12 @@ auto lead_quality(const Position& position) -> double
     const Seat partner = partner_of(me);
     int entries = 0;
     for (int suit = 0; suit < 4; ++suit) {
-        if (suit_has_nonplain(position, suit)) continue;
         entries += suit_quick_winners(position, partner, suit);
     }
     entries = std::min(entries, 3);
     double best = -1e9;
     bool priced = false;
     for (int suit = 0; suit < 4; ++suit) {
-        if (suit_has_nonplain(position, suit)) continue;
         const int ours = suit_dd(position, suit, me, partner, entries);
         int live = 0;
         for (int seat = 0; seat < 4; ++seat) {
