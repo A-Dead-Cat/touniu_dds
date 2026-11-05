@@ -774,7 +774,29 @@ auto full_info_lead(
         // Cash only a top card we own. When the partner holds the top, leading
         // low hands the lead to the partner's winner and keeps ours in hand,
         // which is the transfer the double-dummy line takes.
-        const bool want_high = top_is_ours && top_seat[suit] == me;
+        // Leading from a touching sequence plays its top card: leading the low
+        // end hands the trick to whatever sits just above it.
+        bool leading_sequence = false;
+        {
+            std::vector<long long> ours_in_suit;
+            for (int seat = 0; seat < 4; ++seat) {
+                const Seat who = static_cast<Seat>(seat);
+                if (who != me && who != partner) continue;
+                for (const CardId id : position.hand(who)) {
+                    const Card* held = position.card(id);
+                    if (held == nullptr || !in_suit(*held, static_cast<int>(suit))) continue;
+                    ours_in_suit.push_back(held->rank().millionths());
+                }
+            }
+            std::sort(ours_in_suit.begin(), ours_in_suit.end(), std::greater<long long>());
+            for (std::size_t index = 0; index + 1 < ours_in_suit.size(); ++index) {
+                if (ours_in_suit[index] - ours_in_suit[index + 1] == 1'000'000) {
+                    leading_sequence = true;
+                    break;
+                }
+            }
+        }
+        const bool want_high = (top_is_ours && top_seat[suit] == me) || leading_sequence;
         const bool better_card = best_card == nullptr ||
             (want_high ? card->rank() > best_card->rank()
                        : card->rank() < best_card->rank());
