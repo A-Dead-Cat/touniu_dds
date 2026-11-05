@@ -42,6 +42,8 @@ struct Args {
     bool full_info = false;  // EW sees all four hands, as double dummy does
     bool per_deal = false;   // one JSON line per deal, for corpus analysis
     bool per_card = false;   // dump every legal card and the tricks it costs
+    std::string deal_spec;   // fixed deal: N:S8 H2J6T D3T CQ|E:...|S:...|W:...
+    int leader = -1;         // opening leader when --deal is given
     int show = -1;           // dump the hands and the play of this deal
     bool simulate = false;   // value a lead by playing its trick out, plus tempo
 };
@@ -77,6 +79,11 @@ auto parse_args(const int argc, char** argv) -> Args
             args.full_info = true;
         } else if (flag == "--simulate") {
             args.simulate = true;
+        } else if (flag == "--deal" && index + 1 < argc) {
+            args.deal_spec = argv[++index];
+        } else if (flag == "--leader" && index + 1 < argc) {
+            const std::string seat = argv[++index];
+            args.leader = seat == "N" ? 1 : seat == "E" ? 2 : seat == "S" ? 3 : 0;
         } else if (flag == "--per-card") {
             args.per_card = true;
         } else if (flag == "--per-deal") {
@@ -211,6 +218,47 @@ auto make_deck(const int specials) -> std::vector<Card>
 }
 
 
+
+// "N:S8 H2J6T D3T CQ|E:..." -> hands in deal order. Ranks use 2-9,T,J,Q,K,A.
+auto parse_deal_spec(const std::string& spec, std::array<std::vector<Card>, 4>& hands)
+    -> bool
+{
+    std::uint64_t id = 1;
+    std::size_t start = 0;
+    int seat = 0;
+    while (start <= spec.size() && seat < 4) {
+        std::size_t bar = spec.find('|', start);
+        const std::string part = spec.substr(
+            start, bar == std::string::npos ? std::string::npos : bar - start);
+        start = bar == std::string::npos ? spec.size() + 1 : bar + 1;
+        if (part.size() < 3) return false;
+        if (part[1] != ':') return false;
+        for (std::size_t index = 2; index < part.size();) {
+            while (index < part.size() && part[index] == ' ') ++index;
+            if (index >= part.size()) break;
+            const char suit_letter = part[index++];
+            const int group_suit = suit_letter == 'S' ? 0 : suit_letter == 'H' ? 1
+                : suit_letter == 'D' ? 2 : suit_letter == 'C' ? 3 : -1;
+            if (group_suit < 0) return false;
+            while (index < part.size() && part[index] != ' ') {
+                const char rank_char = part[index++];
+                const int rank = rank_char >= '2' && rank_char <= '9'
+                    ? rank_char - '0'
+                    : rank_char == 'T' ? 10 : rank_char == 'J' ? 11
+                    : rank_char == 'Q' ? 12 : rank_char == 'K' ? 13
+                    : rank_char == 'A' ? 14 : 0;
+                if (rank < 2) return false;
+                hands[static_cast<std::size_t>(seat)].push_back(
+                    Card::normal(CardId{id++},
+                                 static_cast<Suit>(group_suit),
+                                 Rank::integer(rank)));
+            }
+        }
+        ++seat;
+    }
+    return seat == 4;
+}
+
 auto build_scenario(const Args& args, const std::uint32_t seed) -> Scenario
 {
     std::vector<Card> deck = make_deck(args.specials);
@@ -221,6 +269,17 @@ auto build_scenario(const Args& args, const std::uint32_t seed) -> Scenario
                   deck[static_cast<std::size_t>(other)]);
     }
     Scenario scenario;
+    if (!args.deal_spec.empty()) {
+        if (!parse_deal_spec(args.deal_spec, scenario.hands)) {
+            std::fprintf(stderr, "bad --deal spec\n");
+            std::exit(2);
+        }
+        scenario.next_player = static_cast<Seat>(args.leader < 0 ? 0 : args.leader);
+        scenario.contract = Contract::NoTrump;
+        scenario.tricks_remaining =
+            static_cast<std::uint32_t>(scenario.hands[0].size());
+        return scenario;
+    }
     scenario.next_player = Seat::West;
     scenario.contract = Contract::NoTrump;
     scenario.tricks_remaining = static_cast<std::uint32_t>(args.cards);
