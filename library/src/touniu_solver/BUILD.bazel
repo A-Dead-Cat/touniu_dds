@@ -154,5 +154,6 @@ cc_library(
     deps = [
         ":api",
         ":live_position",
+        "//library/tools:heuristic_policy",
     ],
 )

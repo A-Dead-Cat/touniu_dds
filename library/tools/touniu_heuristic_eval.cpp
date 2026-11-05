@@ -396,15 +396,18 @@ auto full_info_lead(
         }
     }
 
-    // Highest live card per suit, and who holds it.
-    std::array<std::optional<Rank>, 4> top_rank{};
-    std::array<Seat, 4> top_seat{};
-    std::array<const Card*, 4> top_card{};
-    std::array<bool, 4> partner_void{};
-    std::array<bool, 4> opponent_void{};
-    std::array<int, 4> length{};
-    std::array<bool, 4> opponent_has_trump{};
-    std::array<bool, 4> partner_has_trump{};
+    // Highest live card per suit, and who holds it. Index 4 collects the
+    // trump-like cards (jokers and NoTrump-kind cards in a no-trump contract),
+    // which outrank every ordinary suit and have to be led as a suit of their
+    // own.
+    std::array<std::optional<Rank>, 5> top_rank{};
+    std::array<Seat, 5> top_seat{};
+    std::array<const Card*, 5> top_card{};
+    std::array<bool, 5> partner_void{};
+    std::array<bool, 5> opponent_void{};
+    std::array<int, 5> length{};
+    std::array<bool, 5> opponent_has_trump{};
+    std::array<bool, 5> partner_has_trump{};
     for (int seat = 0; seat < 4; ++seat) {
         const Seat other = static_cast<Seat>(seat);
         for (const CardId id : position.hand(other)) {
@@ -415,10 +418,14 @@ auto full_info_lead(
                 if (other == partner) partner_has_trump.fill(true);
                 if (other != me && other != partner) opponent_has_trump.fill(true);
             }
-            if (card->intrinsic_suits().size() != 1U) continue;
-            const std::size_t suit =
-                static_cast<std::size_t>(card->intrinsic_suits().front());
-            if (suit >= 4U) continue;
+            std::size_t suit = 0;
+            if (trump_card) {
+                suit = 4;
+            } else {
+                if (card->intrinsic_suits().size() != 1U) continue;
+                suit = static_cast<std::size_t>(card->intrinsic_suits().front());
+                if (suit >= 4U) continue;
+            }
             if (other == me) length[suit] += 1;
             if (!top_rank[suit].has_value() || card->rank() > *top_rank[suit]) {
                 top_rank[suit] = card->rank();
@@ -452,6 +459,25 @@ auto full_info_lead(
         partner_void[suit] = !partner_has;
         opponent_void[suit] = !opponent_has;
     }
+    {
+        bool partner_has = false;
+        bool opponent_has = false;
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat other = static_cast<Seat>(seat);
+            bool holds = false;
+            for (const CardId id : position.hand(other)) {
+                const Card* card = position.card(id);
+                if (card != nullptr && acts_as_trump(position, *card)) {
+                    holds = true;
+                    break;
+                }
+            }
+            if (other == partner) partner_has = holds;
+            else if (other != me) opponent_has = opponent_has || holds;
+        }
+        partner_void[4] = !partner_has;
+        opponent_void[4] = !opponent_has;
+    }
 
     const Action* best = nullptr;
     double best_score = -1e9;
@@ -459,10 +485,15 @@ auto full_info_lead(
     for (const Action& action : legal) {
         if (action.is_pass() || !action.card_id().has_value()) continue;
         const Card* card = position.card(*action.card_id());
-        if (card == nullptr || card->intrinsic_suits().size() != 1U) continue;
-        const std::size_t suit =
-            static_cast<std::size_t>(card->intrinsic_suits().front());
-        if (suit >= 4U) continue;
+        if (card == nullptr) continue;
+        std::size_t suit = 0;
+        if (acts_as_trump(position, *card)) {
+            suit = 4;
+        } else {
+            if (card->intrinsic_suits().size() != 1U) continue;
+            suit = static_cast<std::size_t>(card->intrinsic_suits().front());
+            if (suit >= 4U) continue;
+        }
         double score = 0.0;
         // A cherry bomb outranks every ordinary card but hands the trick to the
         // seat after the thrower, so holding the top bomb is not cashing.
@@ -479,8 +510,10 @@ auto full_info_lead(
         score += top_is_ours ? cash : -1.0;
         // A ruff for the partner is nearly as good; a ruff for an opponent is
         // the worst thing a lead can do.
-        if (partner_void[suit] && partner_has_trump[suit]) score += 2.0;
-        if (opponent_void[suit] && opponent_has_trump[suit]) score -= 4.0;
+        if (suit < 4U) {
+            if (partner_void[suit] && partner_has_trump[suit]) score += 2.0;
+            if (opponent_void[suit] && opponent_has_trump[suit]) score -= 4.0;
+        }
         // Prefer short suits when the partner can ruff and long suits when we
         // are establishing.
         score += 0.1 * static_cast<double>(length[suit]);
@@ -840,14 +873,19 @@ auto bomb_liability(const Position& position, const Seat our_partner) -> double
 // the cards still held. Positive is good for East-West. Used to price the lead
 // that concedes a trick: giving one away only pays when the rest of the suit
 // comes back with interest.
-auto suit_run_balance(const Position& position, const int suit_code) -> int
+auto suit_run_balance(
+    const Position& position,
+    const int suit_code,
+    const Seat me) -> int
 {
+    const Seat partner = partner_of(me);
     std::vector<std::pair<long long, bool>> cards;
     for (int seat = 0; seat < 4; ++seat) {
         for (const CardId id : position.hand(static_cast<Seat>(seat))) {
             const Card* card = position.card(id);
             if (card == nullptr || !in_suit(*card, suit_code)) continue;
-            const bool ours = seat == 1 || seat == 3;
+            const Seat owner = static_cast<Seat>(seat);
+            const bool ours = owner == me || owner == partner;
             cards.emplace_back(card->rank().millionths(), ours);
         }
     }
@@ -905,8 +943,8 @@ auto trick_value(const Position& position, const Action& lead) -> double
     Position copy = position;
     const Seat me = position.next_player();
     const Seat partner = partner_of(me);
-    const auto our_tricks = [](const Position& p) {
-        return static_cast<int>(p.tricks_won(Seat::West) + p.tricks_won(Seat::East));
+    const auto our_tricks = [me, partner](const Position& p) {
+        return static_cast<int>(p.tricks_won(me) + p.tricks_won(partner));
     };
     const int before = our_tricks(copy);
     if (!copy.apply(lead)) return -1e9;
@@ -927,7 +965,7 @@ auto trick_value(const Position& position, const Action& lead) -> double
         const Card* led = position.card(*lead.card_id());
         const int led_suit = led != nullptr ? suit_code(*led) : -1;
         if (led_suit >= 0) {
-            const int balance = suit_run_balance(copy, led_suit);
+            const int balance = suit_run_balance(copy, led_suit, me);
             if (balance < 0) value += 0.6 * static_cast<double>(balance);
         }
     }
@@ -976,6 +1014,7 @@ auto heuristic_action(
             if (card == nullptr) continue;
             double value = trick_value(position, action);
             if (dominates_bomb(position, *card)) value += 0.4;
+
             if (value > best_value) {
                 best_value = value;
                 best = &action;
@@ -1341,6 +1380,7 @@ auto card_text(const Card& card) -> std::string
         case CardKind::SmallJoker: name = "SMALLJOKER"; break;
         case CardKind::ThreeSuitCat: name = "CAT"; break;
         case CardKind::NoTrump: name = "NT" + rank_text(card.rank()); break;
+        case CardKind::Floating: name = "FL"; break;
         case CardKind::Normal: break;
     }
     // A block, reverse, +2 or bomb is still tied to one suit; name it so the
@@ -1350,7 +1390,9 @@ auto card_text(const Card& card) -> std::string
         if (card.kind() != CardKind::Normal) name.push_back('-');
         name.push_back(suit_letter(suit));
     }
-    if (card.kind() == CardKind::Normal) name += rank_text(card.rank());
+    if (card.kind() == CardKind::Normal || card.kind() == CardKind::Floating) {
+        name += rank_text(card.rank());
+    }
     return name;
 }
 
@@ -1386,6 +1428,7 @@ auto kind_code(const Card& card) -> int
 {
     switch (card.kind()) {
         case CardKind::Normal: return 0;
+        case CardKind::Floating: return 10;
         case CardKind::CherryBomb: return 1;
         case CardKind::PlusTwo: return 2;
         case CardKind::Block: return 3;
@@ -1450,6 +1493,14 @@ auto trick_top_rank(const Position& position) -> long long
     return top;
 }
 
+auto heuristic_choose(const touniu_solver::Position& position, const int policy)
+    -> touniu_solver::Action
+{
+    return heuristic_action(position, policy, nullptr);
+}
+
+#if !defined(TOUNIU_HEURISTIC_POLICY_ONLY)
+
 auto main(const int argc, char** argv) -> int
 {
     const Args args = parse_args(argc, argv);
@@ -1470,6 +1521,8 @@ auto main(const int argc, char** argv) -> int
         auto dd_position = Position::create(scenario);
         const int dd_value = solve(*dd_position, Partnership::EastWest, true).tricks;
         int bombs_ew = 0, bombs_ns = 0, free_ew = 0, free_ns = 0, cats_ew = 0, cats_ns = 0;
+        int jokers_ew = 0, jokers_ns = 0, nt_ew = 0, nt_ns = 0;
+        int blocks_ew = 0, blocks_ns = 0, rev_ew = 0, rev_ns = 0, four_ew = 0, four_ns = 0;
         for (int seat = 0; seat < 4; ++seat) {
             const bool ew = seat == 0 || seat == 2;
             for (const CardId id : position->hand(static_cast<Seat>(seat))) {
@@ -1478,6 +1531,14 @@ auto main(const int argc, char** argv) -> int
                 if (card->kind() == CardKind::CherryBomb) (ew ? bombs_ew : bombs_ns) += 1;
                 if (card->kind() == CardKind::PlusTwo) (ew ? free_ew : free_ns) += 1;
                 if (card->kind() == CardKind::ThreeSuitCat) (ew ? cats_ew : cats_ns) += 1;
+                if (card->kind() == CardKind::BigJoker ||
+                    card->kind() == CardKind::SmallJoker) {
+                    (ew ? jokers_ew : jokers_ns) += 1;
+                }
+                if (card->kind() == CardKind::NoTrump) (ew ? nt_ew : nt_ns) += 1;
+                if (card->kind() == CardKind::Block) (ew ? blocks_ew : blocks_ns) += 1;
+                if (card->kind() == CardKind::Reverse) (ew ? rev_ew : rev_ns) += 1;
+                if (card->kind() == CardKind::FourSuit) (ew ? four_ew : four_ns) += 1;
             }
         }
 
@@ -1655,11 +1716,16 @@ if (args.diagnose) {
                 "{\"loss\":%d,\"dd\":%d,\"actual\":%d,\"contract\":%d,"
                 "\"bombsEw\":%d,\"bombsNs\":%d,\"freeEw\":%d,\"freeNs\":%d,"
                 "\"catsEw\":%d,\"catsNs\":%d,"
+                "\"jokersEw\":%d,\"jokersNs\":%d,\"ntEw\":%d,\"ntNs\":%d,"
+                "\"blocksEw\":%d,\"blocksNs\":%d,\"revEw\":%d,\"revNs\":%d,"
+                "\"fourEw\":%d,\"fourNs\":%d,"
                 "\"leadDecisions\":%llu,\"leadRegret\":%llu,"
                 "\"partnerDecisions\":%llu,\"partnerRegret\":%llu,"
                 "\"opponentDecisions\":%llu,\"opponentRegret\":%llu}\n",
                 loss, dd_value, actual, static_cast<int>(scenario.contract),
                 bombs_ew, bombs_ns, free_ew, free_ns, cats_ew, cats_ns,
+                jokers_ew, jokers_ns, nt_ew, nt_ns,
+                blocks_ew, blocks_ns, rev_ew, rev_ns, four_ew, four_ns,
                 diagnose.decisions[0] - diagnose_before.decisions[0],
                 diagnose.regret[0] - diagnose_before.regret[0],
                 diagnose.decisions[1] - diagnose_before.decisions[1],
@@ -1700,3 +1766,5 @@ if (args.diagnose) {
     }
     return 0;
 }
+
+#endif  // TOUNIU_HEURISTIC_POLICY_ONLY

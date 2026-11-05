@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("//:CPPVARIABLES.bzl", "DDS_CPPOPTS", "DDS_LOCAL_DEFINES", "DDS_LINKOPTS")
 
 cc_binary(
@@ -17,4 +17,14 @@ cc_binary(
     linkopts = DDS_LINKOPTS,
     local_defines = DDS_LOCAL_DEFINES,
     deps = ["//library/src/touniu_solver:search"],
+)
+
+cc_library(
+    name = "heuristic_policy",
+    srcs = ["touniu_heuristic_eval.cpp"],
+    hdrs = ["heuristic_policy.hpp"],
+    copts = DDS_CPPOPTS + ["-Wno-unused-function", "-Wno-unused-variable"],
+    local_defines = DDS_LOCAL_DEFINES + ["TOUNIU_HEURISTIC_POLICY_ONLY=1"],
+    deps = ["//library/src/touniu_solver:search"],
+    visibility = ["//visibility:public"],
 )

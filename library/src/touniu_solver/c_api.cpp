@@ -1,3 +1,4 @@
+#include "library/tools/heuristic_policy.hpp"
 #include <touniu_solver/c_api.h>
 
 #include <algorithm>
@@ -374,6 +375,45 @@ extern "C" auto touniu_solver_best_move_v4(
         output->mode = static_cast<std::int32_t>(*action->mode());
         output->effective_suit = static_cast<std::int32_t>(*action->effective_suit());
     }
+    return TOUNIU_SOLVER_OK;
+}
+
+extern "C" auto touniu_solver_heuristic_move_v5(
+    const TouniuAnalyzeRequest* request,
+    std::int32_t policy,
+    TouniuBestMoveOutput* output) -> std::int32_t
+{
+    if (output == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    *output = {};
+    if (request == nullptr) {
+        return TOUNIU_SOLVER_NULL_ARGUMENT;
+    }
+    if (request->abi_version < TOUNIU_SOLVER_ABI_VERSION_V2) {
+        return TOUNIU_SOLVER_UNSUPPORTED_VERSION;
+    }
+    if (!analyze_actions_request_is_valid(*request)) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    const auto live = decode_live_position(*request);
+    if (!live.has_value()) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+    auto position = Position::create(*live);
+    if (!position.has_value()) {
+        return TOUNIU_SOLVER_INVALID_REQUEST;
+    }
+
+    const Action action = heuristic_choose(*position, policy);
+    output->error = TOUNIU_SOLVER_OK;
+    output->tricks = 0;
+    output->is_pass = action.is_pass() ? 1U : 0U;
+    output->card_id = action.card_id().has_value() ? action.card_id()->value : 0U;
+    output->mode = action.mode().has_value() ? static_cast<std::int32_t>(*action.mode()) : 0;
+    output->effective_suit = action.effective_suit().has_value()
+        ? static_cast<std::int32_t>(*action.effective_suit()) : 0;
     return TOUNIU_SOLVER_OK;
 }
 

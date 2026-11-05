@@ -9,6 +9,7 @@ extern "C" {
 #define TOUNIU_SOLVER_ABI_VERSION 1U
 #define TOUNIU_SOLVER_ABI_VERSION_V2 2U
 #define TOUNIU_SOLVER_ABI_VERSION_V4 4U
+#define TOUNIU_SOLVER_ABI_VERSION_V5 5U
 
 enum TouniuSolverError {
     TOUNIU_SOLVER_OK = 0,
@@ -201,6 +202,22 @@ typedef struct TouniuBestMoveOutput {
 
 int32_t touniu_solver_best_move_v4(
     const TouniuAnalyzeRequest* request,
+    TouniuBestMoveOutput* output
+);
+
+
+/*
+ * ABI v5: the heuristic policy's move for the seat on move, for comparing a
+ * fast policy against the exact search. Same request layout as v2/v4 (the
+ * version field may stay at the value the caller already uses). `policy` is
+ * 0 highest-card lead, 1 lowest-card lead, 2 longest-suit low lead, 3
+ * full-information lead, 4 one-trick simulation lead; follows always use the
+ * partnership rules. `tricks` in the output is unused (0) because the policy
+ * does not search; pair this call with v2 to price the action.
+ */
+int32_t touniu_solver_heuristic_move_v5(
+    const TouniuAnalyzeRequest* request,
+    int32_t policy,
     TouniuBestMoveOutput* output
 );
 
