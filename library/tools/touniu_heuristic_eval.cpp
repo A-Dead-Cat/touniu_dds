@@ -1804,6 +1804,13 @@ auto heuristic_action(
     const TrickLeader leader = trick_leader(position);
     const bool partner_winning = leader.play != nullptr && leader.seat == partner;
     const Card* winning_card = leader.card;
+    int led_suit_for_follow = -1;
+    for (const TrickPlay& play : trick) {
+        if (play.action.is_pass()) continue;
+        const Card* led = card_for(play.action);
+        led_suit_for_follow = led != nullptr ? suit_code(*led) : -1;
+        break;
+    }
 
     // Cheapest card that beats the current winner; lowest card otherwise.
     const Action* cheapest_winner = nullptr;
@@ -1825,6 +1832,11 @@ auto heuristic_action(
             (lowest_bomb_card == nullptr || card->rank() < lowest_bomb_card->rank())) {
             lowest_bomb_card = card;
             lowest_bomb = &action;
+        }
+        // A card of another suit is a discard: it cannot win by rank.
+        if (led_suit_for_follow >= 0 && !in_suit(*card, led_suit_for_follow) &&
+            !acts_as_trump(position, *card)) {
+            continue;
         }
         if (winning_card == nullptr || !beats(*card, *winning_card)) continue;
         // A bomb that "wins" hands the trick to the seat after the thrower, and
