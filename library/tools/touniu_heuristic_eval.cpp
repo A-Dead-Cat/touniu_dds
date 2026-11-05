@@ -1605,6 +1605,50 @@ auto heuristic_action(
                 const Card* card = position.card(id);
                 if (card != nullptr && in_suit(*card, led_suit)) ++suit_length;
             }
+            // Measured rule: holding a touching pair against a T/J lead, cover
+            // unless the next honour below the pair is the partner's.
+            {
+                std::vector<long long> mine;
+                for (const CardId id : position.hand(me)) {
+                    const Card* card = position.card(id);
+                    if (card != nullptr && in_suit(*card, led_suit) && !is_bomb(card)) {
+                        mine.push_back(card->rank().millionths());
+                    }
+                }
+                std::sort(mine.begin(), mine.end(), std::greater<long long>());
+                const long long led_rank = card_rank_micro(led_card);
+                bool pair = false;
+                long long pair_low = -1;
+                for (std::size_t i = 0; i + 1 < mine.size(); ++i) {
+                    if (mine[i] > led_rank && mine[i + 1] > led_rank &&
+                        mine[i] - mine[i + 1] <= 1'000'000) {
+                        pair = true;
+                        pair_low = mine[i + 1];
+                        break;
+                    }
+                }
+                const bool middle_lead = led_rank == 10'000'000 || led_rank == 11'000'000;
+                if (pair && middle_lead && suit_length >= 3) {
+                    long long other = -1;
+                    Seat other_owner = me;
+                    for (int seat = 0; seat < 4; ++seat) {
+                        const Seat who = static_cast<Seat>(seat);
+                        if (who == me) continue;
+                        for (const CardId id : position.hand(who)) {
+                            const Card* card = position.card(id);
+                            if (card == nullptr || !in_suit(*card, led_suit)) continue;
+                            const long long rank = card->rank().millionths();
+                            if (rank < pair_low && rank > other) {
+                                other = rank;
+                                other_owner = who;
+                            }
+                        }
+                    }
+                    if (other >= 10'000'000 && other_owner == partner) {
+                        return lowest != nullptr ? *lowest : legal.front();
+                    }
+                }
+            }
             const bool honour = card_rank_micro(led_card) >= 10'000'000;
             const bool from_sequence = led_card != nullptr &&
                 leader_holds_touching_lower(position, leader_seat, *led_card, led_suit);
