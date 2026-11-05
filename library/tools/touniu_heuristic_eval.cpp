@@ -25,6 +25,9 @@ namespace {
 
 using namespace touniu_solver;
 
+auto suit_quick(const Position& position, int suit, Seat leader,
+                Partnership side) -> int;
+
 auto suit_dd(const Position& position, int suit_code, Seat leader,
              Seat entry_seat, int entries) -> int;
 
@@ -682,6 +685,14 @@ auto full_info_lead(
     const bool race = ours_running + theirs_running >= remaining;
     if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
         for (int probe = 0; probe < 4; ++probe) {
+            std::fprintf(stderr, "quick suit %d E=%d W=%d%c", probe,
+                suit_quick(position, probe, Seat::East, Partnership::EastWest),
+                suit_quick(position, probe, Seat::West, Partnership::EastWest),
+                static_cast<char>(10));
+        }
+    }
+    if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
+        for (int probe = 0; probe < 4; ++probe) {
             std::fprintf(stderr, "suit %d E=%d W=%d N=%d S=%d%c", probe,
                 suit_dd(position, probe, Seat::East, Seat::East, 0),
                 suit_dd(position, probe, Seat::West, Seat::West, 0),
@@ -1128,6 +1139,79 @@ auto suit_dd(const Position& position, const int suit_code, const Seat leader,
 // A hand with no entry to the far side cannot repeat a finesse, and the count
 // shows it.
 auto alive(const int live) -> double { return static_cast<double>(live); }
+
+// Quick tricks in one suit: the run our side takes from `leader` until the
+// opponents win a trick. Anything won after that does not count.
+auto suit_quick_impl(const Position& position, const int suit, const Seat leader,
+                     const Partnership side, std::array<std::uint32_t, 4> masks,
+                     int depth) -> int
+{
+    if (depth > 8) return 0;
+    std::uint32_t any = masks[0] | masks[1] | masks[2] | masks[3];
+    if (any == 0U) return 0;
+
+    struct Play { int seat; int bit; };
+    std::function<int(std::array<std::uint32_t, 4>&, int, int, int, int)> step;
+    // (masks, index, best_seat, best_rank, trick_base)
+    step = [&](std::array<std::uint32_t, 4>& m, const int index, const int best_seat,
+               const int best_rank, const int) -> int {
+        if (index == 4) {
+            if (best_seat < 0) return 0;
+            const bool ours =
+                partnership_of(static_cast<Seat>(best_seat)) == side;
+            if (!ours) return 0;
+            return 1 + suit_quick_impl(position, suit, static_cast<Seat>(best_seat),
+                                       side, m, depth + 1);
+        }
+        const int seat = (static_cast<int>(leader) + index) % 4;
+        if (m[static_cast<std::size_t>(seat)] == 0U) {
+            return step(m, index + 1, best_seat, best_rank, 0);
+        }
+        const bool ours = partnership_of(static_cast<Seat>(seat)) == side;
+        int best = ours ? -1 : 1000;
+        for (int bit = 12; bit >= 0; --bit) {
+            const std::uint32_t flag = 1U << static_cast<unsigned>(bit);
+            if ((m[static_cast<std::size_t>(seat)] & flag) == 0U) continue;
+            m[static_cast<std::size_t>(seat)] &= ~flag;
+            const int seat_out = bit > best_rank ? seat : best_seat;
+            const int rank_out = bit > best_rank ? bit : best_rank;
+            const int value = step(m, index + 1, seat_out, rank_out, 0);
+            m[static_cast<std::size_t>(seat)] |= flag;
+            if (ours) {
+                if (value > best) best = value;
+            } else if (value < best) {
+                best = value;
+            }
+        }
+        return best < 0 ? 0 : best;
+    };
+
+    int best = -1;
+    const Seat saved = leader;
+    (void)saved;
+    std::array<std::uint32_t, 4> copy = masks;
+    const int value = step(copy, 0, -1, -1, 0);
+    if (value > best) best = value;
+    return best < 0 ? 0 : best;
+}
+
+auto suit_quick(const Position& position, const int suit, const Seat leader,
+                const Partnership side) -> int
+{
+    std::array<std::uint32_t, 4> masks{};
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card == nullptr || card->kind() != CardKind::Normal) continue;
+            if (!in_suit(*card, suit)) continue;
+            const long long rank = card->rank().millionths() / 1'000'000;
+            if (rank < 2 || rank > 14) continue;
+            masks[static_cast<std::size_t>(seat)] |=
+                1U << static_cast<unsigned>(rank - 2);
+        }
+    }
+    return suit_quick_impl(position, suit, leader, side, masks, 0);
+}
 
 auto lead_quality(const Position& position) -> double
 {
