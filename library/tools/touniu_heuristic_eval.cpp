@@ -799,9 +799,28 @@ auto suit_dd(const Position& position, const int suit_code, const Seat leader,
              const Seat entry_seat, const int entries) -> int
 {
     if (suit_code < 0 || suit_code > 3) return 0;
+    // Dense ordering: every ordinary card of the suit (floating cards included,
+    // specials excluded) is ranked against the others and given a bridge-like
+    // A..2 slot, so the double dummy compares relative order like a real suit.
     std::array<std::uint32_t, 4> masks{};
-    for (int seat = 0; seat < 4; ++seat) {
-        masks[static_cast<std::size_t>(seat)] = suit_mask(position, suit_code, seat);
+    {
+        std::vector<std::pair<long long, int>> ordered;
+        for (int seat = 0; seat < 4; ++seat) {
+            for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+                const Card* card = position.card(id);
+                if (card == nullptr || !in_suit(*card, suit_code)) continue;
+                if (card->kind() != CardKind::Normal &&
+                    card->kind() != CardKind::Floating) continue;
+                ordered.emplace_back(card->rank().millionths(), seat);
+            }
+        }
+        std::sort(ordered.begin(), ordered.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        for (std::size_t index = 0; index < ordered.size() && index < 13U; ++index) {
+            const int slot = 12 - static_cast<int>(index);
+            masks[static_cast<std::size_t>(ordered[index].second)] |=
+                1U << static_cast<unsigned>(slot);
+        }
     }
     if ((masks[0] | masks[1] | masks[2] | masks[3]) == 0U) return 0;
 
@@ -1420,9 +1439,8 @@ auto heuristic_action(
 
         if (partner_winning) {
             if (ruff_behind || behind_best > top_now) {
-                // The partner's trick is exposed to the fourth hand: take it
-                // over with the cheapest card that holds, and do not throw a
-                // card that dies under the fourth hand anyway.
+                // Otherwise take it over with the cheapest card that holds, and
+                // do not throw a card that dies under the fourth hand anyway.
                 if (safe != nullptr) return *safe;
                 return lowest != nullptr ? *lowest : legal.front();
             }
