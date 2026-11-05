@@ -1474,6 +1474,22 @@ auto heuristic_action(
             const bool honour = card_rank_micro(led_card) >= 10'000'000;
             const bool from_sequence = led_card != nullptr &&
                 leader_holds_touching_lower(position, leader_seat, *led_card, led_suit);
+            // Covering a low card is right when a higher card of ours stays
+            // behind the cover: the fourth hand must then spend an honour, and
+            // we still control the suit.
+            int covered_and_held = 0;
+            if (cheapest_winner_card != nullptr) {
+                for (const CardId id : position.hand(me)) {
+                    const Card* card = position.card(id);
+                    if (card != nullptr && in_suit(*card, led_suit) &&
+                        card->rank() > cheapest_winner_card->rank()) {
+                        ++covered_and_held;
+                    }
+                }
+            }
+            if (cheapest_winner != nullptr && covered_and_held > 0) {
+                return *cheapest_winner;
+            }
             if (honour && (!from_sequence || suit_length <= 2) &&
                 cheapest_winner != nullptr) {
                 return *cheapest_winner;
