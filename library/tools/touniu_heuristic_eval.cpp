@@ -25,6 +25,8 @@ namespace {
 
 using namespace touniu_solver;
 
+auto in_suit(const Card& card, const int code) -> bool;
+
 struct Args {
     int cards = 8;
     int deals = 100;
@@ -379,6 +381,39 @@ struct PlayTracker {
 // double dummy makes), so it does not need a search to know which suit cashes,
 // which one an opponent can ruff and which one gives the partner a ruff. The
 // cost is a scan of the hands, not a tree.
+
+// Cards our side holds above every card the opponents hold in that suit: the
+// tricks we could run without giving the lead away.
+auto side_sure_winners(const Position& position, const Partnership side) -> int
+{
+    int total = 0;
+    for (int suit = 0; suit < 4; ++suit) {
+        long long their_best = -1;
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat who = static_cast<Seat>(seat);
+            if (partnership_of(who) == side) continue;
+            for (const CardId id : position.hand(who)) {
+                const Card* card = position.card(id);
+                if (card == nullptr) continue;
+                if (!in_suit(*card, suit)) continue;
+                their_best = std::max<long long>(
+                    their_best, card->rank().millionths());
+            }
+        }
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat who = static_cast<Seat>(seat);
+            if (partnership_of(who) != side) continue;
+            for (const CardId id : position.hand(who)) {
+                const Card* card = position.card(id);
+                if (card == nullptr) continue;
+                if (!in_suit(*card, suit)) continue;
+                if (card->rank().millionths() > their_best) ++total;
+            }
+        }
+    }
+    return total;
+}
+
 auto full_info_lead(
     const Position& position,
     const ActionList& legal,
@@ -481,6 +516,16 @@ auto full_info_lead(
         opponent_void[4] = !opponent_has;
     }
 
+    // Race: when everything the opponents could run plus everything we could
+    // run covers the rest of the deal, cashing comes before shape.
+    const Partnership side = partnership_of(me);
+    const Partnership other =
+        side == Partnership::EastWest ? Partnership::NorthSouth : Partnership::EastWest;
+    const int remaining = static_cast<int>(position.tricks_remaining());
+    const int ours_running = side_sure_winners(position, side);
+    const int theirs_running = side_sure_winners(position, other);
+    const bool race = ours_running + theirs_running >= remaining;
+
     const Action* best = nullptr;
     double best_score = -1e9;
     const Card* best_card = nullptr;
@@ -523,6 +568,22 @@ auto full_info_lead(
         // trick to the next seat and a +2 hands the next seat two cards.
         if (card->kind() == CardKind::CherryBomb) score -= 2.5;
         if (card->kind() == CardKind::PlusTwo) score -= 1.5;
+        if (race) {
+            // Under the race, a card of ours that beats everything they hold
+            // in the suit is a trick that must be taken now.
+            long long their_best = -1;
+            for (int seat = 0; seat < 4; ++seat) {
+                const Seat who = static_cast<Seat>(seat);
+                if (partnership_of(who) == side) continue;
+                for (const CardId id : position.hand(who)) {
+                    const Card* held = position.card(id);
+                    if (held == nullptr || !in_suit(*held, static_cast<int>(suit))) continue;
+                    their_best = std::max<long long>(
+                        their_best, held->rank().millionths());
+                }
+            }
+            if (card->rank().millionths() > their_best) score += 4.0;
+        }
         // Inside the chosen suit: cash the highest card when our side holds the
         // top, otherwise lead low. That is what the blind rule gets right.
         // Cash only a top card we own. When the partner holds the top, leading
