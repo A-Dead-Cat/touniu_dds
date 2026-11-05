@@ -25,6 +25,10 @@ namespace {
 
 using namespace touniu_solver;
 
+auto available_cash(const Position& position, Partnership side) -> int;
+auto suit_quick(const Position& position, int suit, Seat leader,
+                Partnership side) -> int;
+
 auto suit_quick(const Position& position, int suit, Seat leader,
                 Partnership side) -> int;
 
@@ -684,6 +688,10 @@ auto full_info_lead(
     const int theirs_running = side_sure_winners(position, other);
     const bool race = ours_running + theirs_running >= remaining;
     if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
+        std::fprintf(stderr, "cash ours=%d%c", available_cash(position, side),
+                     static_cast<char>(10));
+    }
+    if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
         for (int probe = 0; probe < 4; ++probe) {
             std::fprintf(stderr, "quick suit %d E=%d W=%d%c", probe,
                 suit_quick(position, probe, Seat::East, Partnership::EastWest),
@@ -1211,6 +1219,97 @@ auto suit_quick(const Position& position, const int suit, const Seat leader,
         }
     }
     return suit_quick_impl(position, suit, leader, side, masks, 0);
+}
+
+auto side_tricks(const Position& position, const Partnership side) -> int
+{
+    const Seat a = side == Partnership::EastWest ? Seat::East : Seat::North;
+    const Seat b = side == Partnership::EastWest ? Seat::West : Seat::South;
+    return static_cast<int>(position.tricks_won(a) + position.tricks_won(b));
+}
+
+// Cash-out count with memoisation. Our side keeps counting while it wins; when
+// the opponents win a trick the run resumes only if they cannot cash anything
+// from their new lead (a sterile win).
+auto cash_key(const Position& position, const int leader, const int side) -> std::uint64_t
+{
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (int seat = 0; seat < 4; ++seat) {
+        std::vector<std::uint64_t> ids;
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            ids.push_back(id.value);
+        }
+        std::sort(ids.begin(), ids.end());
+        hash ^= static_cast<std::uint64_t>(ids.size());
+        hash *= 1099511628211ULL;
+        for (const std::uint64_t value : ids) {
+            hash ^= value;
+            hash *= 1099511628211ULL;
+        }
+    }
+    hash ^= static_cast<std::uint64_t>(leader & 3);
+    hash *= 1099511628211ULL;
+    hash ^= static_cast<std::uint64_t>(side & 1);
+    hash *= 1099511628211ULL;
+    return hash;
+}
+
+auto cash_out(const Position& position, const Partnership side, const int depth,
+              std::unordered_map<std::uint64_t, int>& memo) -> int
+{
+    if (position.is_finished() || depth > 24) return 0;
+    const Seat leader = position.next_player();
+    const std::uint64_t key = cash_key(position, static_cast<int>(leader), side == Partnership::EastWest ? 0 : 1);
+    const auto found = memo.find(key);
+    if (found != memo.end()) return found->second;
+
+    const bool ours = partnership_of(leader) == side;
+    const std::uint64_t tricks_before = side_tricks(position, side);
+    const ActionList legal = position.legal_actions();
+    if (legal.empty()) {
+        memo[key] = 0;
+        return 0;
+    }
+    int best = ours ? -1 : 1000;
+    for (const Action& action : legal) {
+        if (action.is_pass() || !action.card_id().has_value()) continue;
+        Position copy = position;
+        const bool ends = copy.current_trick().size() == 3U;
+        if (!copy.apply(action)) continue;
+        int value = 0;
+        if (ends) {
+            const bool we_won = side_tricks(copy, side) > tricks_before;
+            if (we_won) {
+                value = 1 + cash_out(copy, side, depth + 1, memo);
+            } else {
+                const Partnership other = side == Partnership::EastWest
+                    ? Partnership::NorthSouth : Partnership::EastWest;
+                int their_quick = 0;
+                for (int probe = 0; probe < 4; ++probe) {
+                    their_quick = std::max(their_quick,
+                        suit_quick(copy, probe, copy.next_player(), other));
+                }
+                value = their_quick == 0 ? cash_out(copy, side, depth + 1, memo) : 0;
+            }
+        } else {
+            value = cash_out(copy, side, depth + 1, memo);
+        }
+        if (ours) {
+            if (value > best) best = value;
+        } else if (value < best) {
+            best = value;
+        }
+    }
+    const int result = best < 0 ? 0 : best;
+    memo[key] = result;
+    return result;
+}
+
+auto available_cash(const Position& position, const Partnership side) -> int
+{
+    if (partnership_of(position.next_player()) != side) return 0;
+    std::unordered_map<std::uint64_t, int> memo;
+    return cash_out(position, side, 0, memo);
 }
 
 auto lead_quality(const Position& position) -> double
