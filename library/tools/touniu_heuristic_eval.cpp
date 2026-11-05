@@ -749,9 +749,39 @@ auto full_info_lead(
             if (partner_void[suit] && partner_has_trump[suit]) score += 2.0;
             if (opponent_void[suit] && opponent_has_trump[suit]) score -= 4.0;
         }
-        // Prefer short suits when the partner can ruff and long suits when we
-        // are establishing.
-        score += 0.1 * static_cast<double>(length[suit]);
+        // Long-suit value compares the four counts, not just our own length:
+        // how long our longer hand is, our side's total, the same for them, and
+        // whether they can follow at all.
+        {
+            int our_total = 0;
+            int our_max = 0;
+            int their_total = 0;
+            int their_max = 0;
+            for (int seat = 0; seat < 4; ++seat) {
+                const Seat who = static_cast<Seat>(seat);
+                int count = 0;
+                for (const CardId id : position.hand(who)) {
+                    const Card* held = position.card(id);
+                    if (held != nullptr && in_suit(*held, static_cast<int>(suit))) {
+                        ++count;
+                    }
+                }
+                if (who == me || who == partner) {
+                    our_total += count;
+                    our_max = std::max(our_max, count);
+                } else {
+                    their_total += count;
+                    their_max = std::max(their_max, count);
+                }
+            }
+            if (their_total == 0) {
+                // Both opponents are void: leading this suit wins outright.
+                score += 6.0;
+            } else {
+                score += 0.3 * static_cast<double>(our_total - their_total);
+                score += 0.15 * static_cast<double>(our_max - their_max);
+            }
+        }
         // Do not throw the functional cards away as leads: a bomb gives the
         // trick to the next seat and a +2 hands the next seat two cards.
         if (card->kind() == CardKind::CherryBomb) score -= 2.5;
