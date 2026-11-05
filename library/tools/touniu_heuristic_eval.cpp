@@ -44,6 +44,7 @@ struct Args {
     bool per_card = false;   // dump every legal card and the tricks it costs
     std::string deal_spec;   // fixed deal: N:S8 H2J6T D3T CQ|E:...|S:...|W:...
     int leader = -1;         // opening leader when --deal is given
+    std::string first_card;  // force this card as the very first play
     int show = -1;           // dump the hands and the play of this deal
     bool simulate = false;   // value a lead by playing its trick out, plus tempo
 };
@@ -81,6 +82,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.simulate = true;
         } else if (flag == "--deal" && index + 1 < argc) {
             args.deal_spec = argv[++index];
+        } else if (flag == "--first-card" && index + 1 < argc) {
+            args.first_card = argv[++index];
         } else if (flag == "--leader" && index + 1 < argc) {
             const std::string seat = argv[++index];
             args.leader = seat == "N" ? 1 : seat == "E" ? 2 : seat == "S" ? 3 : 0;
@@ -257,6 +260,23 @@ auto parse_deal_spec(const std::string& spec, std::array<std::vector<Card>, 4>& 
         ++seat;
     }
     return seat == 4;
+}
+
+
+// "CT" / "SK" / "H10" -> suit letter plus rank.
+auto card_matches_spec(const Card& card, const std::string& spec) -> bool
+{
+    if (spec.size() < 2) return false;
+    const char suit_letter = spec[0];
+    const int suit = suit_letter == 'S' ? 0 : suit_letter == 'H' ? 1
+        : suit_letter == 'D' ? 2 : suit_letter == 'C' ? 3 : -1;
+    if (suit < 0) return false;
+    if (card.intrinsic_suits().size() != 1U) return false;
+    if (static_cast<int>(card.intrinsic_suits().front()) != suit) return false;
+    const std::string rest = spec.substr(1);
+    const int rank = rest == "T" ? 10 : rest == "J" ? 11 : rest == "Q" ? 12
+        : rest == "K" ? 13 : rest == "A" ? 14 : std::atoi(rest.c_str());
+    return card.rank().millionths() == rank * 1'000'000;
 }
 
 auto build_scenario(const Args& args, const std::uint32_t seed) -> Scenario
@@ -1664,50 +1684,6 @@ auto heuristic_action(
                 const Card* card = position.card(id);
                 if (card != nullptr && in_suit(*card, led_suit)) ++suit_length;
             }
-            // Measured rule: holding a touching pair against a T/J lead, cover
-            // unless the next honour below the pair is the partner's.
-            {
-                std::vector<long long> mine;
-                for (const CardId id : position.hand(me)) {
-                    const Card* card = position.card(id);
-                    if (card != nullptr && in_suit(*card, led_suit) && !is_bomb(card)) {
-                        mine.push_back(card->rank().millionths());
-                    }
-                }
-                std::sort(mine.begin(), mine.end(), std::greater<long long>());
-                const long long led_rank = card_rank_micro(led_card);
-                bool pair = false;
-                long long pair_low = -1;
-                for (std::size_t i = 0; i + 1 < mine.size(); ++i) {
-                    if (mine[i] > led_rank && mine[i + 1] > led_rank &&
-                        mine[i] - mine[i + 1] <= 1'000'000) {
-                        pair = true;
-                        pair_low = mine[i + 1];
-                        break;
-                    }
-                }
-                const bool middle_lead = led_rank == 10'000'000 || led_rank == 11'000'000;
-                if (pair && middle_lead && suit_length >= 3) {
-                    long long other = -1;
-                    Seat other_owner = me;
-                    for (int seat = 0; seat < 4; ++seat) {
-                        const Seat who = static_cast<Seat>(seat);
-                        if (who == me) continue;
-                        for (const CardId id : position.hand(who)) {
-                            const Card* card = position.card(id);
-                            if (card == nullptr || !in_suit(*card, led_suit)) continue;
-                            const long long rank = card->rank().millionths();
-                            if (rank < pair_low && rank > other) {
-                                other = rank;
-                                other_owner = who;
-                            }
-                        }
-                    }
-                    if (other >= 10'000'000 && other_owner == partner) {
-                        return lowest != nullptr ? *lowest : legal.front();
-                    }
-                }
-            }
             const bool honour = card_rank_micro(led_card) >= 10'000'000;
             const bool from_sequence = led_card != nullptr &&
                 leader_holds_touching_lower(position, leader_seat, *led_card, led_suit);
@@ -1988,12 +1964,34 @@ auto main(const int argc, char** argv) -> int
             print_deal(*position);
         }
         int guard = 0;
+        bool first_done = false;
         int trick_number = 1;
         while (!position->is_finished() && guard < 400) {
             ++guard;
             const Seat mover = position->next_player();
             std::optional<Action> action;
-            if (partnership_of(mover) == Partnership::EastWest) {
+            if (!args.first_card.empty() && !first_done) {
+                first_done = true;
+                for (const Action& candidate_action : position->legal_actions()) {
+                    if (candidate_action.is_pass() ||
+                        !candidate_action.card_id().has_value()) {
+                        continue;
+                    }
+                    const Card* candidate_card =
+                        position->card(*candidate_action.card_id());
+                    if (candidate_card != nullptr &&
+                        card_matches_spec(*candidate_card, args.first_card)) {
+                        action = candidate_action;
+                        break;
+                    }
+                }
+                if (!action.has_value()) {
+                    std::fprintf(stderr, "--first-card %s is not legal\n",
+                                 args.first_card.c_str());
+                }
+            }
+            if (!action.has_value() &&
+                partnership_of(mover) == Partnership::EastWest) {
                 const bool leading_now = position->current_trick().empty();
                 if ((args.dd_leads && leading_now) ||
                     (args.dd_follows && !leading_now)) {
@@ -2154,7 +2152,7 @@ if (args.diagnose) {
                         diagnose.mistakes[static_cast<std::size_t>(category)] += 1;
                     }
                 }
-            } else {
+            } else if (!action.has_value()) {
                 const SearchResult result =
                     solve(*position, Partnership::NorthSouth, true);
                 action = result.best_action;
