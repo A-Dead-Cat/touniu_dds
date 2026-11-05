@@ -12,7 +12,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <optional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -735,13 +737,182 @@ auto heuristic_action(
 // Static quality of being on lead here, for the side that is about to move: the
 // best score its own lead candidates reach. Positive means leading is good for
 // that side, negative means every lead is poisoned.
+
+// ---- single-suit double dummy with an entry budget ----
+auto suit_mask(const Position& position, const int suit_code, const int seat)
+    -> std::uint32_t
+{
+    std::uint32_t mask = 0;
+    for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+        const Card* card = position.card(id);
+        if (card == nullptr || card->kind() != CardKind::Normal) continue;
+        if (!in_suit(*card, suit_code)) continue;
+        const long long rank = card->rank().millionths() / 1'000'000;
+        if (rank < 2 || rank > 14) continue;
+        mask |= 1U << static_cast<unsigned>(rank - 2);
+    }
+    return mask;
+}
+
+auto suit_has_nonplain(const Position& position, const int suit_code) -> bool
+{
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card == nullptr || !in_suit(*card, suit_code)) continue;
+            if (card->kind() != CardKind::Normal) return true;
+        }
+    }
+    return false;
+}
+
+// Cards of `seat` in this suit that beat every card the opponents hold there.
+auto suit_quick_winners(const Position& position, const Seat seat, const int suit_code)
+    -> int
+{
+    const Seat partner = partner_of(seat);
+    long long opponents_best = -1;
+    for (int other = 0; other < 4; ++other) {
+        const Seat who = static_cast<Seat>(other);
+        if (who == seat || who == partner) continue;
+        for (const CardId id : position.hand(who)) {
+            const Card* card = position.card(id);
+            if (card == nullptr || !in_suit(*card, suit_code)) continue;
+            opponents_best = std::max<long long>(
+                opponents_best, card->rank().millionths());
+        }
+    }
+    int winners = 0;
+    for (const CardId id : position.hand(seat)) {
+        const Card* card = position.card(id);
+        if (card == nullptr || !in_suit(*card, suit_code)) continue;
+        if (card->rank().millionths() > opponents_best) ++winners;
+    }
+    return winners;
+}
+
+// Tricks East-West take in this suit with both sides playing optimally.
+// `entry_seat` may take the lead `entries` times from another suit; that is the
+// only way to change which side of the table leads the suit, which is what a
+// finesse is about.
+auto suit_dd(const Position& position, const int suit_code, const Seat leader,
+             const Seat entry_seat, const int entries) -> int
+{
+    if (suit_code < 0 || suit_code > 3) return 0;
+    std::array<std::uint32_t, 4> masks{};
+    for (int seat = 0; seat < 4; ++seat) {
+        masks[static_cast<std::size_t>(seat)] = suit_mask(position, suit_code, seat);
+    }
+    if ((masks[0] | masks[1] | masks[2] | masks[3]) == 0U) return 0;
+
+    const auto pack = [](const std::array<std::uint32_t, 4>& m, const int lead,
+                         const int budget) {
+        std::uint64_t key = 0;
+        for (int seat = 0; seat < 4; ++seat) {
+            key |= static_cast<std::uint64_t>(m[static_cast<std::size_t>(seat)])
+                << (13 * seat);
+        }
+        key |= static_cast<std::uint64_t>(lead & 3) << 52;
+        key |= static_cast<std::uint64_t>(budget & 7) << 54;
+        return key;
+    };
+    std::unordered_map<std::uint64_t, int> memo;
+    const int entry = static_cast<int>(entry_seat);
+
+    std::function<int(std::array<std::uint32_t, 4>, int, int)> trick;
+    std::function<int(std::array<std::uint32_t, 4>&, int, int, int, int, int)> play;
+
+    play = [&](std::array<std::uint32_t, 4>& m, const int lead, const int budget,
+               const int index, const int best_seat, const int best_rank) -> int {
+        if (index == 4) {
+            const bool ours = best_seat == 1 || best_seat == 3;
+            return (ours ? 1 : 0) + trick(m, best_seat, budget);
+        }
+        const int seat = (lead + index) % 4;
+        if (m[static_cast<std::size_t>(seat)] == 0U) {
+            return play(m, lead, budget, index + 1, best_seat, best_rank);
+        }
+        const bool ours = seat == 1 || seat == 3;
+        int best = ours ? -1 : 1000;
+        for (int rank = 12; rank >= 0; --rank) {
+            const std::uint32_t bit = 1U << static_cast<unsigned>(rank);
+            if ((m[static_cast<std::size_t>(seat)] & bit) == 0U) continue;
+            m[static_cast<std::size_t>(seat)] &= ~bit;
+            const int seat_out = rank > best_rank ? seat : best_seat;
+            const int rank_out = rank > best_rank ? rank : best_rank;
+            const int value = play(m, lead, budget, index + 1, seat_out, rank_out);
+            m[static_cast<std::size_t>(seat)] |= bit;
+            if (ours) {
+                if (value > best) best = value;
+            } else if (value < best) {
+                best = value;
+            }
+        }
+        return best;
+    };
+
+    trick = [&](const std::array<std::uint32_t, 4> m, const int lead,
+                const int budget) -> int {
+        if ((m[0] | m[1] | m[2] | m[3]) == 0U) return 0;
+        const std::uint64_t key = pack(m, lead, budget);
+        const auto found = memo.find(key);
+        if (found != memo.end()) return found->second;
+        int best = -1;
+        if (budget > 0 && m[static_cast<std::size_t>(entry)] != 0U && lead != entry) {
+            best = trick(m, entry, budget - 1);
+        }
+        std::array<std::uint32_t, 4> copy = m;
+        const int value = play(copy, lead, budget, 0, -1, -1);
+        if (value > best) best = value;
+        memo.emplace(key, best);
+        return best;
+    };
+
+    return trick(masks, static_cast<int>(leader), entries);
+}
+
+// Worth of being on lead here: the best this side can get out of one suit,
+// priced by compound double dummy with the entries the partner really holds.
+// A hand with no entry to the far side cannot repeat a finesse, and the count
+// shows it.
+auto alive(const int live) -> double { return static_cast<double>(live); }
+
 auto lead_quality(const Position& position) -> double
 {
     const ActionList legal = position.legal_actions();
     if (legal.empty()) return 0.0;
-    double score = 0.0;
-    full_info_lead(position, legal, &score, nullptr);
-    return score;
+    const Seat me = position.next_player();
+    const Seat partner = partner_of(me);
+    int entries = 0;
+    for (int suit = 0; suit < 4; ++suit) {
+        if (suit_has_nonplain(position, suit)) continue;
+        entries += suit_quick_winners(position, partner, suit);
+    }
+    entries = std::min(entries, 3);
+    double best = -1e9;
+    bool priced = false;
+    for (int suit = 0; suit < 4; ++suit) {
+        if (suit_has_nonplain(position, suit)) continue;
+        const int ours = suit_dd(position, suit, me, partner, entries);
+        int live = 0;
+        for (int seat = 0; seat < 4; ++seat) {
+            for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+                const Card* card = position.card(id);
+                if (card != nullptr && in_suit(*card, suit)) ++live;
+            }
+        }
+        const double centred = static_cast<double>(ours) - 0.25 * alive(live);
+        if (centred > best) {
+            best = centred;
+            priced = true;
+        }
+    }
+    if (!priced) {
+        double score = 0.0;
+        full_info_lead(position, legal, &score, nullptr);
+        return score;
+    }
+    return best;
 }
 
 // A rank-15 card played earlier in the trick stops a later bomb from winning,
