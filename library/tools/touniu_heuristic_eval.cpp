@@ -26,6 +26,9 @@ namespace {
 
 using namespace touniu_solver;
 
+auto suit_quick(const Position& position, int suit, Seat leader,
+                Partnership side) -> int;
+
 auto available_cash(const Position& position, Partnership side) -> int;
 auto suit_quick(const Position& position, int suit, Seat leader,
                 Partnership side) -> int;
@@ -795,6 +798,12 @@ auto full_info_lead(
                     break;
                 }
             }
+        }
+        // Attacking a suit the opponents still hold stoppers in is slow: price
+        // the trick they keep winning there.
+        {
+            const int theirs_here = suit_quick(position, static_cast<int>(suit), me, other);
+            score -= 0.8 * static_cast<double>(theirs_here);
         }
         const bool want_high = (top_is_ours && top_seat[suit] == me) || leading_sequence;
         const bool better_card = best_card == nullptr ||
