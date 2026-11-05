@@ -810,11 +810,14 @@ auto full_info_lead(
         // Leading from a touching sequence plays its top card: leading the low
         // end hands the trick to whatever sits just above it.
         bool leading_sequence = false;
+        long long sequence_top = -1;
         {
             std::vector<long long> ours_in_suit;
+            // Only the cards we can actually play: the partner's honours are
+            // not candidates for this lead.
             for (int seat = 0; seat < 4; ++seat) {
                 const Seat who = static_cast<Seat>(seat);
-                if (who != me && who != partner) continue;
+                if (who != me) continue;
                 for (const CardId id : position.hand(who)) {
                     const Card* held = position.card(id);
                     if (held == nullptr || !in_suit(*held, static_cast<int>(suit))) continue;
@@ -825,6 +828,7 @@ auto full_info_lead(
             for (std::size_t index = 0; index + 1 < ours_in_suit.size(); ++index) {
                 if (ours_in_suit[index] - ours_in_suit[index + 1] == 1'000'000) {
                     leading_sequence = true;
+                    sequence_top = ours_in_suit[index];
                     break;
                 }
             }
@@ -836,13 +840,28 @@ auto full_info_lead(
             score -= 0.8 * static_cast<double>(theirs_here);
         }
         const bool want_high = (top_is_ours && top_seat[suit] == me) || leading_sequence;
-        const bool better_card = best_card == nullptr ||
+        bool better_card = best_card == nullptr ||
             (want_high ? card->rank() > best_card->rank()
                        : card->rank() < best_card->rank());
+        if (sequence_top > 0 && best_card != nullptr) {
+            const bool wanted = card->rank().millionths() == sequence_top;
+            const bool best_wanted = best_card->rank().millionths() == sequence_top;
+            if (wanted != best_wanted) better_card = wanted;
+        }
         if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
             std::fprintf(stderr, "  option suit=%d rank=%d score=%.2f\n",
                          static_cast<int>(suit), static_cast<int>(card->rank().millionths()),
                          score);
+        }
+        if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
+            std::fprintf(stderr, "opt suit=%d rank=%d score=%.2f hi=%d seq=%d seqtop=%d topours=%d%c",
+                         static_cast<int>(suit),
+                         static_cast<int>(card->rank().millionths() / 1'000'000),
+                         score, want_high ? 1 : 0,
+                         leading_sequence ? 1 : 0,
+                         static_cast<int>(sequence_top / 1'000'000),
+                         top_is_ours ? 1 : 0,
+                         static_cast<char>(10));
         }
         if (score > best_score || (score == best_score && better_card)) {
             best_score = score;
