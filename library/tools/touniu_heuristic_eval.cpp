@@ -25,6 +25,9 @@ namespace {
 
 using namespace touniu_solver;
 
+auto suit_dd(const Position& position, int suit_code, Seat leader,
+             Seat entry_seat, int entries) -> int;
+
 auto in_suit(const Card& card, const int code) -> bool;
 
 struct Args {
@@ -677,6 +680,16 @@ auto full_info_lead(
     const int ours_running = side_sure_winners(position, side);
     const int theirs_running = side_sure_winners(position, other);
     const bool race = ours_running + theirs_running >= remaining;
+    if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
+        for (int probe = 0; probe < 4; ++probe) {
+            std::fprintf(stderr, "suit %d E=%d W=%d N=%d S=%d%c", probe,
+                suit_dd(position, probe, Seat::East, Seat::East, 0),
+                suit_dd(position, probe, Seat::West, Seat::West, 0),
+                suit_dd(position, probe, Seat::North, Seat::North, 0),
+                suit_dd(position, probe, Seat::South, Seat::South, 0),
+                static_cast<char>(10));
+        }
+    }
 
     const Action* best = nullptr;
     double best_score = -1e9;
@@ -1062,14 +1075,16 @@ auto suit_dd(const Position& position, const int suit_code, const Seat leader,
     play = [&](std::array<std::uint32_t, 4>& m, const int lead, const int budget,
                const int index, const int best_seat, const int best_rank) -> int {
         if (index == 4) {
-            const bool ours = best_seat == 1 || best_seat == 3;
+            const bool ours = best_seat >= 0 &&
+                partnership_of(static_cast<Seat>(best_seat)) == Partnership::EastWest;
             return (ours ? 1 : 0) + trick(m, best_seat, budget);
         }
         const int seat = (lead + index) % 4;
         if (m[static_cast<std::size_t>(seat)] == 0U) {
             return play(m, lead, budget, index + 1, best_seat, best_rank);
         }
-        const bool ours = seat == 1 || seat == 3;
+        const bool ours =
+            partnership_of(static_cast<Seat>(seat)) == Partnership::EastWest;
         int best = ours ? -1 : 1000;
         for (int rank = 12; rank >= 0; --rank) {
             const std::uint32_t bit = 1U << static_cast<unsigned>(rank);
