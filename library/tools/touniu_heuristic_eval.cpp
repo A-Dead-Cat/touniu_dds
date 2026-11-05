@@ -745,6 +745,11 @@ auto full_info_lead(
         const bool better_card = best_card == nullptr ||
             (want_high ? card->rank() > best_card->rank()
                        : card->rank() < best_card->rank());
+        if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
+            std::fprintf(stderr, "  option suit=%d rank=%d score=%.2f\n",
+                         static_cast<int>(suit), static_cast<int>(card->rank().millionths()),
+                         score);
+        }
         if (score > best_score || (score == best_score && better_card)) {
             best_score = score;
             best = &action;
