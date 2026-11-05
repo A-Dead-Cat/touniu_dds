@@ -165,3 +165,38 @@ test_suite(
     name = "wasm_system_tests",
     tests = [":wasm_examples_system_test"],
 )
+
+# Upstream double-dummy solver for plain 52-card positions.
+BRIDGE_WASM_LINKOPTS = [
+    "-sWASM=1",
+    "--no-entry",
+    "-sALLOW_MEMORY_GROWTH=1",
+    "-sMODULARIZE=1",
+    "-sEXPORT_NAME=createBridgeSolver",
+    "-sEXPORTED_FUNCTIONS=['_bridge_solve_board','_malloc','_free']",
+    "-sEXPORTED_RUNTIME_METHODS=['getValue','setValue','HEAPU8']",
+    "-sENVIRONMENT=worker,node",
+    "-sINCOMING_MODULE_JS_API=['wasmBinary']",
+]
+
+cc_binary(
+    name = "bridge_solve_wasm_cc",
+    srcs = ["bridge_solve_module.cpp"],
+    copts = DDS_CPPOPTS,
+    linkopts = DDS_LINKOPTS + select({
+        "//:build_wasm": BRIDGE_WASM_LINKOPTS,
+        "//conditions:default": [],
+    }),
+    local_defines = DDS_LOCAL_DEFINES,
+    deps = ["//library/src:dds"],
+)
+
+wasm_cc_binary(
+    name = "bridge_solve_wasm",
+    cc_target = ":bridge_solve_wasm_cc",
+    threads = "off",
+    outputs = [
+        "bridge_solver.js",
+        "bridge_solver.wasm",
+    ],
+)
