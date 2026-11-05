@@ -41,6 +41,7 @@ struct Args {
     bool void_aware = false; // use the voids inferred from the play
     bool full_info = false;  // EW sees all four hands, as double dummy does
     bool per_deal = false;   // one JSON line per deal, for corpus analysis
+    bool per_card = false;   // dump every legal card and the tricks it costs
     int show = -1;           // dump the hands and the play of this deal
     bool simulate = false;   // value a lead by playing its trick out, plus tempo
 };
@@ -76,6 +77,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.full_info = true;
         } else if (flag == "--simulate") {
             args.simulate = true;
+        } else if (flag == "--per-card") {
+            args.per_card = true;
         } else if (flag == "--per-deal") {
             args.per_deal = true;
         } else if (flag == "--show" && index + 1 < argc) {
@@ -1841,6 +1844,37 @@ auto main(const int argc, char** argv) -> int
                     }
                 }
                 if (!action.has_value()) return 1;
+                if (args.per_card) {
+                    // Every legal card of this decision, priced against the
+                    // best one: exactly "how many tricks does it give away".
+                    Position probe = *position;
+                    const int best_value =
+                        solve(probe, Partnership::EastWest, true).tricks;
+                    std::printf("trick %d %c to play:\n",
+                                static_cast<int>(position->tricks_remaining()),
+                                seat_letter(mover));
+                    for (const Action& candidate : position->legal_actions()) {
+                        int value = best_value;
+                        if (candidate.is_pass()) {
+                            if (position->apply(candidate)) {
+                                Position after = *position;
+                                value = solve(after, Partnership::EastWest, true).tricks;
+                                position->undo();
+                            }
+                        } else if (candidate.card_id().has_value()) {
+                            if (position->apply(candidate)) {
+                                Position after = *position;
+                                value = solve(after, Partnership::EastWest, true).tricks;
+                                position->undo();
+                            }
+                        }
+                        const Card* played = candidate.is_pass()
+                            ? nullptr : position->card(*candidate.card_id());
+                        std::printf("  %-12s %2d  (-%d)\n",
+                                    played != nullptr ? card_text(*played).c_str() : "pass",
+                                    value, best_value - value);
+                    }
+                }
 if (args.diagnose) {
                     const int category = category_of(*position);
                     // Both values are the final EW trick count from this point.
