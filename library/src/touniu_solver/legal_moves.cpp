@@ -217,8 +217,19 @@ void legal_actions_into(
         }
         if (card->kind() == CardKind::ThreeSuitCat) {
             if (state.contract() == Contract::NoTrump) {
-                if (*led_suit == Suit::NoTrump && !has_led_suit) {
-                    actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+                if (*led_suit == Suit::NoTrump) {
+                    if (!has_led_suit) {
+                        actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+                    }
+                } else {
+                    // No-trump: the cat follows any ordinary lead, whether or
+                    // not a real card of that suit is held. It is simply the
+                    // lowest card of the trick, and skipping it lets the
+                    // holder keep a stopper behind the leader.
+                    actions.push_back(Action::play(id, PlayMode::Follow, *led_suit));
+                    if (!has_led_suit) {
+                        actions.push_back(Action::play(id, PlayMode::Discard, Suit::NoTrump));
+                    }
                 }
                 continue;
             }

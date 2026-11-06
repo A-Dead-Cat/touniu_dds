@@ -138,6 +138,56 @@ TEST(LegalMovesTest, ThreeSuitCatCannotLeadWhileAnOrdinaryCardRemains)
     EXPECT_EQ(actions.front(), Action::play(CardId{2}, PlayMode::Lead, Suit::Hearts));
 }
 
+TEST(LegalMovesTest, ThreeSuitCatMayFollowAnOrdinaryLeadWhileHoldingThatSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::South;
+    scenario.contract = Contract::NoTrump;
+    scenario.hands[static_cast<int>(Seat::South)] = {
+        Card::three_suit_cat(CardId{1}),
+        normal_card(2, Suit::Spades, 12),
+        normal_card(3, Suit::Spades, 6),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::East, Action::play(CardId{9}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    // Both spades and the cat: the cat follows the lead as the lowest card of
+    // the trick, so its holder can duck a round without spending a spade.
+    ASSERT_EQ(actions.size(), 3U);
+    EXPECT_NE(
+        std::find(
+            actions.begin(),
+            actions.end(),
+            Action::play(CardId{1}, PlayMode::Follow, Suit::Spades)
+        ),
+        actions.end()
+    );
+}
+
+TEST(LegalMovesTest, ThreeSuitCatMustFollowWhenVoidInTheLedSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::South;
+    scenario.contract = Contract::NoTrump;
+    scenario.hands[static_cast<int>(Seat::South)] = {
+        Card::three_suit_cat(CardId{1}),
+        normal_card(2, Suit::Hearts, 3),
+    };
+    const auto state = State::create(scenario);
+    const Trick trick{{Seat::East, Action::play(CardId{9}, PlayMode::Lead, Suit::Spades)}};
+
+    ASSERT_TRUE(state.has_value());
+    const std::vector<Action> actions = legal_actions(*state, trick);
+
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_EQ(
+        actions.front(),
+        Action::play(CardId{1}, PlayMode::Follow, Suit::Spades));
+}
+
 TEST(LegalMovesTest, FourSuitCardMayFollowOrDiscardWhenVoidInTheLedSuit)
 {
     Scenario scenario;
