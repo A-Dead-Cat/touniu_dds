@@ -580,6 +580,148 @@ auto side_sure_winners(const Position& position, const Partnership side) -> int
     return total;
 }
 
+// A suit the opponents can no longer stop: they hold at most three cards of it
+// and every card we hold is above their best. Cashing it out drops their cards
+// and every card of ours left in the suit then wins, because in no-trump a
+// discard can never take a trick. The shorter holding has to cash first: if the
+// long hand plays its honours the short hand's winners are left stranded.
+struct CashRun {
+    const Card* card = nullptr;
+    int tricks = 0;
+};
+
+// A spare entry: a suit the short hand can lead and the long hand wins whatever
+// the opponents hold. That is the road back after the short hand's last card of
+// the run suit is gone.
+auto has_spare_entry(
+    const Position& position, const Seat long_hand, const Seat short_hand,
+    const int skip_suit) -> bool
+{
+    for (int suit = 0; suit < 4; ++suit) {
+        if (suit == skip_suit) continue;
+        bool short_holds = false;
+        for (const CardId id : position.hand(short_hand)) {
+            const Card* card = position.card(id);
+            if (card != nullptr && in_suit(*card, suit)) {
+                short_holds = true;
+                break;
+            }
+        }
+        if (!short_holds) continue;
+        long long long_best = -1;
+        long long other_best = -1;
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat who = static_cast<Seat>(seat);
+            if (who == short_hand) continue;
+            for (const CardId id : position.hand(who)) {
+                const Card* card = position.card(id);
+                if (card == nullptr || !in_suit(*card, suit)) continue;
+                if (who == long_hand) {
+                    long_best = std::max<long long>(long_best, card->rank().millionths());
+                } else {
+                    other_best = std::max<long long>(other_best, card->rank().millionths());
+                }
+            }
+        }
+        if (long_best > other_best) return true;
+    }
+    return false;
+}
+
+auto cash_run_lead(const Position& position, const bool allow) -> CashRun
+{
+    CashRun best;
+    if (!allow || position.contract() != Contract::NoTrump) return best;
+    // Special cards change what wins a trick, so this reading is plain deals
+    // only.
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card != nullptr && card->kind() != CardKind::Normal) return best;
+        }
+    }
+    const Seat me = position.next_player();
+    const Seat partner = partner_of(me);
+    const int remaining = static_cast<int>(position.tricks_remaining());
+    for (int suit = 0; suit < 4; ++suit) {
+        std::vector<const Card*> mine;
+        std::vector<const Card*> mates;
+        int their_count = 0;
+        long long their_best = -1;
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat who = static_cast<Seat>(seat);
+            for (const CardId id : position.hand(who)) {
+                const Card* card = position.card(id);
+                if (card == nullptr || !in_suit(*card, suit)) continue;
+                if (who == me) {
+                    mine.push_back(card);
+                } else if (who == partner) {
+                    mates.push_back(card);
+                } else {
+                    ++their_count;
+                    their_best = std::max<long long>(
+                        their_best, card->rank().millionths());
+                }
+            }
+        }
+        if (mine.empty()) continue;
+        if (their_count < 1 || their_count > 3) continue;
+        int run_mine = 0;
+        int run_mates = 0;
+        for (const Card* card : mine) {
+            if (card->rank().millionths() > their_best) ++run_mine;
+        }
+        for (const Card* card : mates) {
+            if (card->rank().millionths() > their_best) ++run_mates;
+        }
+        // Their last cards must all fall under ours, and the run has to leave
+        // something behind: covering their cards is not a gain by itself.
+        if (run_mine + run_mates < their_count) continue;
+        // Only the leader's own cards can be reeled off consecutively: once the
+        // partner takes one of them the lead moves to the other hand, which may
+        // have no way back.
+        const int tricks = std::min(remaining, static_cast<int>(mine.size()));
+        if (tricks < 2) continue;
+        // Cash the short side's honours first, but only when the hand can still
+        // be reached afterwards: a short holding that is emptied by cashing
+        // needs a spare entry in the long hand, otherwise its winners starve
+        // (a singleton Q opposite AKx with no entry wins one trick).
+        // Short holding with no winner at all: cash the long hand's own top.
+        const bool mine_shorter = mine.size() < mates.size();
+        const bool mine_longer = mine.size() > mates.size();
+        const int short_winners = mine_shorter ? run_mine : run_mates;
+        const int long_winners = mine_shorter ? run_mates : run_mine;
+        const std::size_t short_len = mine_shorter ? mine.size() : mates.size();
+        const Seat short_seat = mine_shorter ? me : partner;
+        const Seat long_seat = mine_shorter ? partner : me;
+        bool cash_short_first = short_winners > 0;
+        if (cash_short_first && short_len == 1U && long_winners > 0 &&
+            !has_spare_entry(position, long_seat, short_seat, suit)) {
+            cash_short_first = false;
+        }
+        // Leading low hands the trick to the partner's honour; only do it when
+        // the short hand is the one that should cash, and the lead is not
+        // already there.
+        const bool lead_low = cash_short_first && mine_longer &&
+            std::getenv("TUONIU_NO_CASH_LEAD_LOW") == nullptr;
+        const Card* choice = nullptr;
+        const Card* lowest = nullptr;
+        for (const Card* card : mine) {
+            if (lowest == nullptr || card->rank() < lowest->rank()) lowest = card;
+            if (card->rank().millionths() <= their_best) continue;
+            if (choice == nullptr || card->rank() > choice->rank()) choice = card;
+        }
+        if (choice == nullptr) choice = lowest;
+        if (lead_low) choice = lowest;
+        if (choice == nullptr) continue;
+        if (tricks > best.tricks) {
+            best.card = choice;
+            best.tricks = tricks;
+        }
+    }
+    return best;
+}
+
 auto full_info_lead(
     const Position& position,
     const ActionList& legal,
@@ -711,6 +853,27 @@ auto full_info_lead(
                 suit_dd(position, probe, Seat::North, Seat::North, 0),
                 suit_dd(position, probe, Seat::South, Seat::South, 0),
                 static_cast<char>(10));
+        }
+    }
+
+    // Cash a suit out before anything else: their last cards fall under our top
+    // ones, and every card of ours left in the suit wins afterwards.
+    const CashRun run = cash_run_lead(
+        position, std::getenv("TUONIU_NO_CASH_RUN") == nullptr);
+    if (run.card != nullptr) {
+        if (std::getenv("TUONIU_DEBUG_CASH") != nullptr) {
+            std::fprintf(stderr, "cashrun seat=%d suit=%d rank=%d tricks=%d%c",
+                         static_cast<int>(position.next_player()),
+                         run.card->intrinsic_suits().empty()
+                             ? -1 : static_cast<int>(run.card->intrinsic_suits().front()),
+                         static_cast<int>(run.card->rank().millionths() / 1'000'000),
+                         run.tricks, static_cast<char>(10));
+        }
+        for (const Action& action : legal) {
+            if (!action.is_pass() && action.card_id().has_value() &&
+                *action.card_id() == run.card->id()) {
+                return action;
+            }
         }
     }
 
