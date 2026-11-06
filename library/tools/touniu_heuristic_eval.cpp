@@ -8,9 +8,11 @@
 //   touniu_heuristic_eval --cards 8 --deals 100 [--specials 0] [--verbose]
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <functional>
@@ -40,6 +42,8 @@ auto suit_dd(const Position& position, int suit_code, Seat leader,
              Seat entry_seat, int entries) -> int;
 
 auto in_suit(const Card& card, const int code) -> bool;
+auto effective_rank_micro(const Position& position, const Card* card) -> long long;
+auto acts_as_trump(const Position& position, const Card& card) -> bool;
 
 struct Args {
     int cards = 8;
@@ -256,14 +260,67 @@ auto parse_deal_spec(const std::string& spec, std::array<std::vector<Card>, 4>& 
             const char suit_letter = part[index++];
             const int group_suit = suit_letter == 'S' ? 0 : suit_letter == 'H' ? 1
                 : suit_letter == 'D' ? 2 : suit_letter == 'C' ? 3 : -1;
+            if (group_suit < 0 && suit_letter == 'X') {
+                // "XCAT" is a three-flower cat: no suit, so it gets its own
+                // group instead of riding in one.
+                const std::size_t special_start = index;
+                while (index < part.size() && part[index] != ' ') ++index;
+                const std::string special = part.substr(special_start, index - special_start);
+                if (special != "CAT") return false;
+                hands[static_cast<std::size_t>(seat)].push_back(
+                    Card::three_suit_cat(CardId{id++}));
+                continue;
+            }
             if (group_suit < 0) return false;
-            while (index < part.size() && part[index] != ' ') {
-                const char rank_char = part[index++];
-                const int rank = rank_char >= '2' && rank_char <= '9'
-                    ? rank_char - '0'
-                    : rank_char == 'T' ? 10 : rank_char == 'J' ? 11
-                    : rank_char == 'Q' ? 12 : rank_char == 'K' ? 13
-                    : rank_char == 'A' ? 14 : 0;
+            // The ranks of one suit are written as one run: "K98", "AJT86".
+            // A decimal run like "11.000001" is a floating card.
+            const std::size_t group_start = index;
+            while (index < part.size() && part[index] != ' ') ++index;
+            const std::string group = part.substr(group_start, index - group_start);
+            std::vector<std::string> tokens;
+            for (std::size_t pos = 0; pos < group.size();) {
+                const std::size_t dot = group.find('.', pos);
+                if (dot != std::string::npos) {
+                    std::size_t begin = dot;
+                    while (begin > pos &&
+                           std::isdigit(static_cast<unsigned char>(group[begin - 1]))) {
+                        --begin;
+                    }
+                    std::size_t end = dot + 1;
+                    while (end < group.size() &&
+                           std::isdigit(static_cast<unsigned char>(group[end]))) {
+                        ++end;
+                    }
+                    for (std::size_t k = pos; k < begin; ++k) {
+                        tokens.push_back(std::string(1, group[k]));
+                    }
+                    tokens.push_back(group.substr(begin, end - begin));
+                    pos = end;
+                    continue;
+                }
+                if (group[pos] == '1' && pos + 1 < group.size() && group[pos + 1] == '0') {
+                    tokens.push_back("10");
+                    pos += 2;
+                    continue;
+                }
+                tokens.push_back(std::string(1, group[pos]));
+                ++pos;
+            }
+            for (const std::string& token : tokens) {
+                if (token.find('.') != std::string::npos) {
+                    const auto millionths = static_cast<std::int32_t>(
+                        std::llround(std::atof(token.c_str()) * 1'000'000.0));
+                    const std::optional<Rank> rank = Rank::floating(millionths);
+                    if (!rank.has_value()) return false;
+                    hands[static_cast<std::size_t>(seat)].push_back(
+                        Card::floating(CardId{id++},
+                                       static_cast<Suit>(group_suit), *rank));
+                    continue;
+                }
+                const int rank = token == "10" || token == "T" ? 10
+                    : token == "J" ? 11 : token == "Q" ? 12
+                    : token == "K" ? 13 : token == "A" ? 14
+                    : std::atoi(token.c_str());
                 if (rank < 2) return false;
                 hands[static_cast<std::size_t>(seat)].push_back(
                     Card::normal(CardId{id++},
@@ -588,6 +645,10 @@ auto side_sure_winners(const Position& position, const Partnership side) -> int
 struct CashRun {
     const Card* card = nullptr;
     int tricks = 0;
+    // A suit that would cash but for a cat in an opponent's hand. One extra
+    // hold-up round means the long hand must not open it: the short hand has to
+    // lead it through the opponent instead.
+    int blocked_suit = -1;
 };
 
 // A spare entry: a suit the short hand can lead and the long hand wins whatever
@@ -632,14 +693,6 @@ auto cash_run_lead(const Position& position, const bool allow) -> CashRun
 {
     CashRun best;
     if (!allow || position.contract() != Contract::NoTrump) return best;
-    // Special cards change what wins a trick, so this reading is plain deals
-    // only.
-    for (int seat = 0; seat < 4; ++seat) {
-        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
-            const Card* card = position.card(id);
-            if (card != nullptr && card->kind() != CardKind::Normal) return best;
-        }
-    }
     const Seat me = position.next_player();
     const Seat partner = partner_of(me);
     const int remaining = static_cast<int>(position.tricks_remaining());
@@ -648,11 +701,33 @@ auto cash_run_lead(const Position& position, const bool allow) -> CashRun
         std::vector<const Card*> mates;
         int their_count = 0;
         long long their_best = -1;
+        // A trump-like card can win any trick whatever the led suit, and a +2
+        // also outranks an ace, so either one ends the run. Bombs are left out
+        // because a bomb hands the trick to the next seat: an opponent's bomb is
+        // a trick for us.
+        bool trump_behind = false;
+        bool cat_behind = false;
         for (int seat = 0; seat < 4; ++seat) {
             const Seat who = static_cast<Seat>(seat);
             for (const CardId id : position.hand(who)) {
                 const Card* card = position.card(id);
-                if (card == nullptr || !in_suit(*card, suit)) continue;
+                if (card == nullptr) continue;
+                if (who != me && who != partner && acts_as_trump(position, *card)) {
+                    trump_behind = true;
+                }
+                if (who != me && who != partner &&
+                    card->kind() == CardKind::ThreeSuitCat) {
+                    cat_behind = true;
+                }
+                if (!in_suit(*card, suit)) continue;
+                // A bomb that takes the trick gives it to our side, so it is not
+                // a stopper; it is also not a card to cash with.
+                if (card->kind() == CardKind::CherryBomb) continue;
+                if (card->kind() == CardKind::PlusTwo && who != me && who != partner) {
+                    ++their_count;
+                    their_best = std::max<long long>(their_best, 15'000'000);
+                    continue;
+                }
                 if (who == me) {
                     mine.push_back(card);
                 } else if (who == partner) {
@@ -660,23 +735,35 @@ auto cash_run_lead(const Position& position, const bool allow) -> CashRun
                 } else {
                     ++their_count;
                     their_best = std::max<long long>(
-                        their_best, card->rank().millionths());
+                        their_best, effective_rank_micro(position, card));
                 }
             }
         }
+        if (trump_behind) continue;
         if (mine.empty()) continue;
-        if (their_count < 1 || their_count > 3) continue;
+        // The cat is no card of the suit, but it can follow any ordinary lead in
+        // no-trump and lose, so one round of the run can be absorbed without
+        // spending a real card: the opponents hold up once longer.
+        const int rounds = their_count + (cat_behind ? 1 : 0);
+        if (rounds < 1 || rounds > 3) continue;
         int run_mine = 0;
         int run_mates = 0;
         for (const Card* card : mine) {
-            if (card->rank().millionths() > their_best) ++run_mine;
+            if (effective_rank_micro(position, card) > their_best) ++run_mine;
         }
         for (const Card* card : mates) {
-            if (card->rank().millionths() > their_best) ++run_mates;
+            if (effective_rank_micro(position, card) > their_best) ++run_mates;
+        }
+        if (cat_behind && run_mine + run_mates < rounds &&
+            run_mine + run_mates >= their_count &&
+            mine.size() > mates.size() && best.blocked_suit < 0) {
+            // Only from the long hand: the short hand leading this suit runs it
+            // through the opponent and is exactly the line to aim for.
+            best.blocked_suit = suit;
         }
         // Their last cards must all fall under ours, and the run has to leave
         // something behind: covering their cards is not a gain by itself.
-        if (run_mine + run_mates < their_count) continue;
+        if (run_mine + run_mates < rounds) continue;
         // Only the leader's own cards can be reeled off consecutively: once the
         // partner takes one of them the lead moves to the other hand, which may
         // have no way back.
@@ -707,9 +794,16 @@ auto cash_run_lead(const Position& position, const bool allow) -> CashRun
         const Card* choice = nullptr;
         const Card* lowest = nullptr;
         for (const Card* card : mine) {
-            if (lowest == nullptr || card->rank() < lowest->rank()) lowest = card;
-            if (card->rank().millionths() <= their_best) continue;
-            if (choice == nullptr || card->rank() > choice->rank()) choice = card;
+            const long long rank = effective_rank_micro(position, card);
+            if (lowest == nullptr ||
+                rank < effective_rank_micro(position, lowest)) {
+                lowest = card;
+            }
+            if (rank <= their_best) continue;
+            if (choice == nullptr ||
+                rank > effective_rank_micro(position, choice)) {
+                choice = card;
+            }
         }
         if (choice == nullptr) choice = lowest;
         if (lead_low) choice = lowest;
@@ -893,6 +987,13 @@ auto full_info_lead(
             if (suit >= 4U) continue;
         }
         double score = 0.0;
+        // A cat behind one of our runs absorbs a round, so opening the suit
+        // from the long hand only wins the covered part; the short hand has to
+        // lead it through the opponent later.
+        if (run.blocked_suit >= 0 &&
+            suit == static_cast<std::size_t>(run.blocked_suit)) {
+            score -= 2.0;
+        }
         // A cherry bomb outranks every ordinary card but hands the trick to the
         // seat after the thrower, so holding the top bomb is not cashing.
         const bool top_is_bomb =
