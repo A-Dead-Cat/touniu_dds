@@ -2174,6 +2174,11 @@ auto heuristic_action(
             for (const Action& action : legal) {
                 const Card* card = card_for(action);
                 if (card == nullptr || is_bomb(card) || is_plus_two(card)) continue;
+                // A card of another suit is a discard: it never holds the
+                // trick, however high it ranks.
+                if (!in_suit(*card, led_suit) && !acts_as_trump(position, *card)) {
+                    continue;
+                }
                 const long long rank = effective_rank_micro(position, card);
                 if (rank <= top_now || rank <= behind_best) continue;
                 if (safe_card == nullptr ||
