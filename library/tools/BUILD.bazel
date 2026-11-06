@@ -23,7 +23,25 @@ cc_library(
     name = "heuristic_policy",
     srcs = ["touniu_heuristic_eval.cpp"],
     hdrs = ["heuristic_policy.hpp"],
-    copts = DDS_CPPOPTS + ["-Wno-unused-function", "-Wno-unused-variable"],
+    # Policy-only builds compile out main(), which leaves helpers unused. The
+    # suppression has to be spelled per toolchain: MSVC rejects the GCC flags
+    # outright (D8021), and /WX turns the warnings into errors.
+    copts = DDS_CPPOPTS + select({
+        "//:build_windows": [
+            "/wd4505",  # unreferenced local function
+            "/wd4189",  # local variable initialized but not referenced
+            "/wd4100",  # unreferenced formal parameter
+        ],
+        "//:debug_build_windows": [
+            "/wd4505",
+            "/wd4189",
+            "/wd4100",
+        ],
+        "//conditions:default": [
+            "-Wno-unused-function",
+            "-Wno-unused-variable",
+        ],
+    }),
     local_defines = DDS_LOCAL_DEFINES + ["TOUNIU_HEURISTIC_POLICY_ONLY=1"],
     deps = ["//library/src/touniu_solver:search"],
     visibility = ["//visibility:public"],
