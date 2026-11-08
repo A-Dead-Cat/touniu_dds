@@ -2407,6 +2407,36 @@ auto heuristic_action(
         // trick cheaply. Hold it if a card can, otherwise do not spend a card
         // that the fourth hand beats anyway.
         if (safe != nullptr) return *safe;
+        // The partner cannot win and no card holds against the seats behind.
+        // A floating point is just another rank here: cover when ducking would
+        // mean throwing a card below nine purely to keep an honour, and the
+        // cover either wins now or forces the fourth hand to spend something
+        // bigger. Ducking with a nine or better keeps the honour for a card an
+        // opponent still holds.
+        if (std::getenv("TUONIU_THIRD_HAND_COVER_OFF") == nullptr) {
+            const Action* cover = nullptr;
+            const Card* cover_card = nullptr;
+            for (const Action& action : legal) {
+                const Card* card = card_for(action);
+                if (card == nullptr || is_bomb(card) || is_plus_two(card)) continue;
+                if (!in_suit(*card, led_suit) && !acts_as_trump(position, *card)) {
+                    continue;
+                }
+                const long long rank = effective_rank_micro(position, card);
+                if (rank <= top_now) continue;
+                if (cover_card == nullptr ||
+                    rank < effective_rank_micro(position, cover_card)) {
+                    cover_card = card;
+                    cover = &action;
+                }
+            }
+            const Card* duck = throw_away != nullptr ? card_for(*throw_away) : nullptr;
+            if (cover_card != nullptr && duck != nullptr &&
+                card_rank_micro(duck) < 9'000'000 &&
+                card_rank_micro(cover_card) >= 9'000'000) {
+                return *cover;
+            }
+        }
         return throw_away != nullptr ? *throw_away : legal.front();
     }
 
