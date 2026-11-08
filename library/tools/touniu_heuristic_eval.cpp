@@ -2104,6 +2104,114 @@ auto heuristic_action(
     const Card* lowest_card = nullptr;
     const Action* lowest_bomb = nullptr;
     const Card* lowest_bomb_card = nullptr;
+
+    // ---- what a discard costs ----
+    // The ranking follows what the card actually does for us:
+    //   1. a stopper, or the last small card guarding it: dropping it hands the
+    //      opponents their run in that suit;
+    //   2. my own trick: a card above every card they hold in the suit;
+    //   3. everything else, where the lowest card is the right one to let go.
+    std::array<int, 4> their_count{};
+    std::array<long long, 4> their_best{};
+    std::array<int, 4> my_len{};
+    std::array<long long, 4> my_best{};
+    std::array<int, 4> their_run{};
+    {
+        their_best.fill(-1);
+        my_best.fill(-1);
+        for (int seat = 0; seat < 4; ++seat) {
+            const Seat who = static_cast<Seat>(seat);
+            for (const CardId id : position.hand(who)) {
+                const Card* card = position.card(id);
+                if (card == nullptr || card->kind() == CardKind::CherryBomb ||
+                    card->kind() == CardKind::PlusTwo) {
+                    continue;
+                }
+                const int suit = suit_code(*card);
+                if (suit < 0) continue;
+                const long long rank = effective_rank_micro(position, card);
+                if (who == me) {
+                    ++my_len[suit];
+                    my_best[suit] = std::max(my_best[suit], rank);
+                } else if (who == partner) {
+                    continue;
+                } else {
+                    ++their_count[suit];
+                    their_best[suit] = std::max(their_best[suit], rank);
+                }
+            }
+        }
+        // Cards they cash before my stopper bites in that suit.
+        for (int suit = 0; suit < 4; ++suit) {
+            int run = 0;
+            for (int seat = 0; seat < 4; ++seat) {
+                const Seat who = static_cast<Seat>(seat);
+                if (who == me || who == partner) continue;
+                for (const CardId id : position.hand(who)) {
+                    const Card* card = position.card(id);
+                    if (card == nullptr || card->kind() == CardKind::CherryBomb ||
+                        card->kind() == CardKind::PlusTwo) {
+                        continue;
+                    }
+                    if (suit_code(*card) != suit) continue;
+                    if (effective_rank_micro(position, card) > my_best[suit]) ++run;
+                }
+            }
+            their_run[suit] = run;
+        }
+    }
+    const auto discard_cost = [&](const Card* card) -> double {
+        if (card == nullptr) return 1e9;
+        const int suit = suit_code(*card);
+        if (suit < 0) return 1e9;
+        const long long rank = effective_rank_micro(position, card);
+        double cost = static_cast<double>(rank) / 1'000'000.0;
+        const bool stopper = their_run[suit] >= 1 && my_len[suit] > their_run[suit];
+        if (their_count[suit] > 0 && rank > their_best[suit]) {
+            // My own trick: nothing they hold in the suit beats it.
+            cost += 10.0;
+        } else if (stopper && my_len[suit] == their_run[suit] + 1) {
+            // The last small card holding the stopper up.
+            cost += 11.0;
+        } else if (stopper && rank == my_best[suit]) {
+            // The stopper itself.
+            cost += 12.0;
+        }
+        return cost;
+    };
+    const Action* dullest = nullptr;
+    double dullest_cost = 1e9;
+    for (const Action& action : legal) {
+        const Card* card = card_for(action);
+        if (card == nullptr) continue;
+        const double cost = discard_cost(card);
+        if (cost < dullest_cost) {
+            dullest_cost = cost;
+            dullest = &action;
+        }
+    }
+    // Void in the led suit: the throw-away is the least useful card. Otherwise
+    // the fallback is the lowest card of the suit being followed.
+    const bool void_in_led = led_suit_for_follow >= 0 && std::none_of(
+        position.hand(me).begin(), position.hand(me).end(),
+        [&](const CardId id) {
+            const Card* card = position.card(id);
+            return card != nullptr && in_suit(*card, led_suit_for_follow);
+        });
+    // Functional specials (bombs, +2, block, reverse, cat, wild cards) change
+    // what a trick is worth, so the ranking only reads ordinary and floating
+    // cards; other decks keep the lowest-card throw-away.
+    bool special_deal = false;
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card != nullptr && card->kind() != CardKind::Normal &&
+                card->kind() != CardKind::Floating) {
+                special_deal = true;
+            }
+        }
+    }
+
     for (const Action& action : legal) {
         const Card* card = card_for(action);
         if (card == nullptr) continue;
@@ -2140,6 +2248,13 @@ auto heuristic_action(
             cheapest_winner = &action;
         }
     }
+
+    // The throw-away is the least useful card when the hand cannot follow;
+    // otherwise the fallback is the lowest card of the suit being followed.
+    const bool special_blocked = special_deal &&
+        std::getenv("TUONIU_DISCARD_FORCE") == nullptr;
+    const Action* throw_away = (void_in_led && !special_blocked &&
+        std::getenv("TUONIU_DISCARD_OFF") == nullptr) ? dullest : lowest;
 
     // ---- partnership follow rules ----
     // The led suit, who led, and how far the trick has got.
@@ -2206,13 +2321,13 @@ auto heuristic_action(
                     }
                 }
                 if (low_non_bomb != nullptr) return *low_non_bomb;
-                return lowest != nullptr ? *lowest : legal.front();
+                return throw_away != nullptr ? *throw_away : legal.front();
             }
             if (safe != nullptr) return *safe;
             if (cheapest_winner != nullptr) return *cheapest_winner;
             if (plus_two_winner != nullptr) return *plus_two_winner;
             if (lowest_bomb != nullptr) return *lowest_bomb;
-            return lowest != nullptr ? *lowest : legal.front();
+            return throw_away != nullptr ? *throw_away : legal.front();
         }
 
         if (partner_winning) {
@@ -2220,7 +2335,7 @@ auto heuristic_action(
                 // Otherwise take it over with the cheapest card that holds, and
                 // do not throw a card that dies under the fourth hand anyway.
                 if (safe != nullptr) return *safe;
-                return lowest != nullptr ? *lowest : legal.front();
+                return throw_away != nullptr ? *throw_away : legal.front();
             }
             // A bomb outranks the partner's card and redirects the trick to the
             // seat after the thrower, so it would give this trick away.
@@ -2237,7 +2352,7 @@ auto heuristic_action(
                 }
             }
             if (low_non_bomb != nullptr) return *low_non_bomb;
-            return lowest != nullptr ? *lowest : legal.front();
+            return throw_away != nullptr ? *throw_away : legal.front();
         }
 
         const bool second_hand = leader_seat != partner && plays_before == 1;
@@ -2272,21 +2387,21 @@ auto heuristic_action(
                 cheapest_winner != nullptr) {
                 return *cheapest_winner;
             }
-            return lowest != nullptr ? *lowest : legal.front();
+            return throw_away != nullptr ? *throw_away : legal.front();
         }
 
         // Third hand (the partner led): stop the fourth hand from winning the
         // trick cheaply. Hold it if a card can, otherwise do not spend a card
         // that the fourth hand beats anyway.
         if (safe != nullptr) return *safe;
-        return lowest != nullptr ? *lowest : legal.front();
+        return throw_away != nullptr ? *throw_away : legal.front();
     }
 
     if (partner_winning) {
         // Dump a bomb while the partner is taking the trick: it is harmless as
         // a discard and stops being a liability later.
         if (lowest_bomb != nullptr) return *lowest_bomb;
-        return lowest != nullptr ? *lowest : legal.front();
+        return throw_away != nullptr ? *throw_away : legal.front();
     }
     if (cheapest_winner != nullptr) {
         return *cheapest_winner;
