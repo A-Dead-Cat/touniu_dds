@@ -2115,10 +2115,12 @@ auto heuristic_action(
     std::array<long long, 4> their_best{};
     std::array<int, 4> my_len{};
     std::array<long long, 4> my_best{};
+    std::array<long long, 4> partner_best{};
     std::array<int, 4> their_run{};
     {
         their_best.fill(-1);
         my_best.fill(-1);
+        partner_best.fill(-1);
         for (int seat = 0; seat < 4; ++seat) {
             const Seat who = static_cast<Seat>(seat);
             for (const CardId id : position.hand(who)) {
@@ -2134,7 +2136,7 @@ auto heuristic_action(
                     ++my_len[suit];
                     my_best[suit] = std::max(my_best[suit], rank);
                 } else if (who == partner) {
-                    continue;
+                    partner_best[suit] = std::max(partner_best[suit], rank);
                 } else {
                     ++their_count[suit];
                     their_best[suit] = std::max(their_best[suit], rank);
@@ -2160,6 +2162,12 @@ auto heuristic_action(
             their_run[suit] = run;
         }
     }
+    // A sure trick of my own is an entry: without one I can never get the lead
+    // to play a link towards the partner's winners.
+    bool i_have_entry = false;
+    for (int suit = 0; suit < 4; ++suit) {
+        if (my_best[suit] > their_best[suit]) i_have_entry = true;
+    }
     const auto discard_cost = [&](const Card* card) -> double {
         if (card == nullptr) return 1e9;
         const int suit = suit_code(*card);
@@ -2176,6 +2184,11 @@ auto heuristic_action(
         } else if (stopper && rank == my_best[suit]) {
             // The stopper itself.
             cost += 12.0;
+        }
+        if (my_len[suit] == 1 && partner_best[suit] > their_best[suit] && i_have_entry) {
+            // My only card in a suit the partner can cash: drop it and the
+            // partner's winners are cut off whenever I hold the lead.
+            cost += 6.0;
         }
         return cost;
     };
