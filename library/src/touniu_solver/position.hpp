@@ -45,6 +45,11 @@ public:
     // compact path instead of a catalog search.
     [[nodiscard]] auto quick_rank(CardId id) const -> std::int32_t;
     [[nodiscard]] auto uses_compact_operations() const -> bool;
+    // Once every effect card has left play at a trick boundary, the remaining
+    // unequal hands can use the ordinary-card bitmask engine. The returned
+    // position has an independent undo history, so the caller can search it
+    // without mixing the general and compact make/undo representations.
+    [[nodiscard]] auto compact_plain_tail() const -> std::optional<Position>;
     [[nodiscard]] auto card(CardId id) const -> const Card*;
     [[nodiscard]] auto card_catalog() const -> const std::vector<Card>&;
     [[nodiscard]] auto draw_index() const -> std::uint64_t;

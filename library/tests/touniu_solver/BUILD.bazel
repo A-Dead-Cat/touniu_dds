@@ -11,6 +11,17 @@ cc_test(
 )
 
 cc_test(
+    name = "heuristic_policy_test",
+    size = "small",
+    srcs = ["heuristic_policy_test.cpp"],
+    deps = [
+        "//library/src/touniu_solver:position",
+        "//library/tools:heuristic_policy",
+        "@googletest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "trick_resolution_test",
     size = "small",
     srcs = ["trick_resolution_test.cpp"],

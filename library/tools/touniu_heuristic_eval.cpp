@@ -1044,6 +1044,17 @@ auto full_info_lead(
             } else {
                 score += 0.3 * static_cast<double>(our_total - their_total);
                 score += 0.15 * static_cast<double>(our_max - their_max);
+
+                // Do not establish a long suit merely because the other
+                // opponent is void. Once our stopper is driven out, all of
+                // the concentrated holding sits in one hand and can run. The
+                // previous total/max terms barely distinguished 6-0 from
+                // 3-3, which made a defender lead directly into a six-card
+                // suit when the other opponent had none.
+                const int their_min = their_total - their_max;
+                const int concentration = their_max - their_min;
+                score -= 0.75 * static_cast<double>(
+                    std::max(0, concentration - 2));
             }
         }
         // Do not throw the functional cards away as leads: a bomb gives the

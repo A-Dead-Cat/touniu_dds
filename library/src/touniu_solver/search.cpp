@@ -270,6 +270,16 @@ public:
     // Canonical North-South result plus the action that achieves it.
     auto solve(Position& position) -> SearchResult
     {
+        if (options_.use_compact_plain_tail &&
+            !position.uses_compact_operations()) {
+            auto compact = position.compact_plain_tail();
+            if (compact.has_value()) {
+                if (options_.stats != nullptr) {
+                    ++options_.stats->compact_plain_tail_switches;
+                }
+                return solve(*compact);
+            }
+        }
         root_depth_ = search_depth(position);
         const int low = score_ns(position);
         if (position.is_finished()) {
@@ -294,6 +304,16 @@ public:
     auto analyze(Position& position, const Partnership target)
         -> std::vector<ActionAnalysis>
     {
+        if (options_.use_compact_plain_tail &&
+            !position.uses_compact_operations()) {
+            auto compact = position.compact_plain_tail();
+            if (compact.has_value()) {
+                if (options_.stats != nullptr) {
+                    ++options_.stats->compact_plain_tail_switches;
+                }
+                return analyze(*compact, target);
+            }
+        }
         std::vector<ActionAnalysis> results;
         if (position.is_finished()) {
             return results;
@@ -422,6 +442,16 @@ private:
 
     auto evaluate(Position& position, int alpha, int beta) -> SearchValue
     {
+        if (options_.use_compact_plain_tail &&
+            !position.uses_compact_operations()) {
+            auto compact = position.compact_plain_tail();
+            if (compact.has_value()) {
+                if (options_.stats != nullptr) {
+                    ++options_.stats->compact_plain_tail_switches;
+                }
+                return evaluate(*compact, alpha, beta);
+            }
+        }
         if (options_.stats != nullptr) {
             ++options_.stats->nodes;
         }

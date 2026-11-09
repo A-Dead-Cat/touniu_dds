@@ -218,6 +218,52 @@ TEST(SearchTest, SharedActionAnalysisHandlesPartialTricksAndEffects)
     EXPECT_EQ(position.current_trick().size(), 1U);
 }
 
+TEST(SearchTest, CompactPlainTailMatchesGeneralUnequalHandSearch)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[0] = {
+        Card::normal(CardId{1}, Suit::Hearts, Rank::integer(2)),
+    };
+    scenario.hands[1] = {
+        Card::normal(CardId{2}, Suit::Hearts, Rank::integer(3)),
+    };
+    scenario.hands[2] = {
+        Card::normal(CardId{3}, Suit::Hearts, Rank::integer(4)),
+    };
+    scenario.hands[3] = {Card::plus_two(CardId{4}, Suit::Hearts)};
+    auto position = *Position::create(scenario);
+    for (const CardId id : {CardId{1}, CardId{2}, CardId{3}, CardId{4}}) {
+        const auto actions = position.legal_actions();
+        const auto found = std::find_if(
+            actions.begin(), actions.end(), [id](const Action& action) {
+                return action.card_id() == id;
+            });
+        ASSERT_NE(found, actions.end());
+        position.apply_known_legal(*found);
+    }
+    auto reference = position;
+
+    SearchStats fast_stats;
+    SearchOptions fast_options;
+    fast_options.stats = &fast_stats;
+    fast_options.use_compact_plain_tail = true;
+    SearchOptions reference_options = fast_options;
+    reference_options.stats = nullptr;
+    reference_options.use_compact_plain_tail = false;
+
+    const SearchResult fast = solve(
+        position, Partnership::NorthSouth, fast_options);
+    const SearchResult general = solve(
+        reference, Partnership::NorthSouth, reference_options);
+
+    EXPECT_EQ(fast.tricks, general.tricks);
+    EXPECT_EQ(fast.best_action, general.best_action);
+    EXPECT_GT(fast_stats.compact_plain_tail_switches, 0U);
+}
+
 auto check_seeded_deals(const SearchOptions& options) -> void
 {
     // 16 normal cards: four ranks in four suits, dealt four per seat. Different

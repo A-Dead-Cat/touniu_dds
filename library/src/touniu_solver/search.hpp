@@ -38,6 +38,7 @@ struct SearchStats {
     std::uint64_t equivalence_blocked_interval = 0;
     std::uint64_t table_replacements = 0;
     std::uint64_t forced_nodes = 0;
+    std::uint64_t compact_plain_tail_switches = 0;
 };
 
 struct SearchOptions {
@@ -66,6 +67,10 @@ struct SearchOptions {
     // (take the trick, cheapest winner first; when leading, highest card
     // first). Equal scores keep the canonical order.
     bool use_ordering_score = true;
+    // A deal that started with special cards may become an ordinary-card tail
+    // after a completed trick. Switch that subtree to compact bitmasks;
+    // unequal hand sizes and empty-hand PASS remain supported.
+    bool use_compact_plain_tail = true;
 };
 
 struct SearchResult {

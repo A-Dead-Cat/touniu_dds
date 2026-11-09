@@ -136,6 +136,64 @@ TEST(PositionTest, PlusTwoDrawsAndUndoRestoresDrawIndex)
     EXPECT_EQ(position->hand(Seat::West).size(), 1U);
 }
 
+TEST(PositionTest, ConvertsSettledUnequalPlainTailToCompactOperations)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[static_cast<int>(Seat::West)] = {
+        normal_card(1, Suit::Hearts, 2),
+    };
+    scenario.hands[static_cast<int>(Seat::North)] = {
+        normal_card(2, Suit::Hearts, 3),
+    };
+    scenario.hands[static_cast<int>(Seat::East)] = {
+        normal_card(3, Suit::Hearts, 4),
+    };
+    scenario.hands[static_cast<int>(Seat::South)] = {
+        plus_two_card(4, Suit::Hearts),
+    };
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    EXPECT_FALSE(position->uses_compact_operations());
+
+    const auto play = [&](const CardId id) {
+        const auto actions = position->legal_actions();
+        const auto found = std::find_if(
+            actions.begin(), actions.end(), [id](const Action& action) {
+                return action.card_id() == id;
+            });
+        ASSERT_NE(found, actions.end());
+        position->apply_known_legal(*found);
+    };
+
+    play(CardId{1});
+    play(CardId{2});
+    play(CardId{3});
+    EXPECT_FALSE(position->compact_plain_tail().has_value());
+    play(CardId{4});
+
+    ASSERT_TRUE(position->current_trick().empty());
+    EXPECT_EQ(position->next_player(), Seat::South);
+    EXPECT_EQ(position->hand_size(Seat::West), 2U);
+    EXPECT_EQ(position->hand_size(Seat::North), 0U);
+    EXPECT_EQ(position->hand_size(Seat::East), 0U);
+    EXPECT_EQ(position->hand_size(Seat::South), 0U);
+
+    auto compact = position->compact_plain_tail();
+    ASSERT_TRUE(compact.has_value());
+    EXPECT_TRUE(compact->uses_compact_operations());
+    EXPECT_EQ(compact->next_player(), position->next_player());
+    EXPECT_EQ(compact->direction(), position->direction());
+    EXPECT_EQ(compact->tricks_remaining(), position->tricks_remaining());
+    EXPECT_EQ(compact->draw_index(), position->draw_index());
+    EXPECT_EQ(compact->hand(Seat::West), position->hand(Seat::West));
+    const auto actions = compact->legal_actions();
+    ASSERT_EQ(actions.size(), 1U);
+    EXPECT_TRUE(actions.front().is_pass());
+}
+
 TEST(PositionTest, ReverseFlipsDirectionAtCollectionAndUndoRestores)
 {
     Scenario scenario;

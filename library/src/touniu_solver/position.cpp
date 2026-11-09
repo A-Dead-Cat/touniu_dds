@@ -673,6 +673,35 @@ auto Position::uses_compact_operations() const -> bool
     return fast_active_;
 }
 
+auto Position::compact_plain_tail() const -> std::optional<Position>
+{
+    if (fast_active_ || !current_trick_.empty() || pending_block_.has_value() ||
+        valid_reverse_count_ != 0U) {
+        return std::nullopt;
+    }
+    for (int seat = 0; seat < 4; ++seat) {
+        const auto& cards = state_.hand(static_cast<Seat>(seat));
+        if (cards.size() > fast_order_[seat].size()) {
+            return std::nullopt;
+        }
+        for (const CardId id : cards) {
+            const Card* definition = state_.card(id);
+            if (definition == nullptr || !is_plain_single_suit(*definition)) {
+                return std::nullopt;
+            }
+        }
+    }
+
+    Position compact = *this;
+    compact.undo_stack_.clear();
+    compact.fast_undo_.clear();
+    compact.rebuild_universe();
+    if (!compact.fast_active_) {
+        return std::nullopt;
+    }
+    return compact;
+}
+
 auto Position::hand_size(const Seat seat) const -> std::uint32_t
 {
     return fast_active_
