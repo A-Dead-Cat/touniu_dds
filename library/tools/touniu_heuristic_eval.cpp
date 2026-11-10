@@ -1088,45 +1088,62 @@ auto full_info_lead(
         bool leading_sequence = false;
         long long sequence_top = -1;
         {
-            std::vector<long long> ours_in_suit;
-            // Only the cards we can actually play: the partner's honours are
-            // not candidates for this lead.
+            struct LiveRank {
+                long long rank;
+                Seat owner;
+            };
+            std::vector<LiveRank> live_in_suit;
+            // Touching means adjacent in the exact live rank order. A
+            // floating card anywhere between J and T therefore breaks JT;
+            // two cards are not touching merely because their integer parts
+            // differ by one.
             for (int seat = 0; seat < 4; ++seat) {
                 const Seat who = static_cast<Seat>(seat);
-                if (who != me) continue;
                 for (const CardId id : position.hand(who)) {
                     const Card* held = position.card(id);
-                    if (held == nullptr || !in_suit(*held, static_cast<int>(suit))) continue;
-                    ours_in_suit.push_back(held->rank().millionths());
+                    if (held == nullptr || !in_suit(*held, static_cast<int>(suit)) ||
+                        (held->kind() != CardKind::Normal &&
+                         held->kind() != CardKind::Floating)) {
+                        continue;
+                    }
+                    live_in_suit.push_back({held->rank().millionths(), who});
                 }
             }
-            std::sort(ours_in_suit.begin(), ours_in_suit.end(), std::greater<long long>());
-            for (std::size_t index = 0; index + 1 < ours_in_suit.size(); ++index) {
-                if (ours_in_suit[index] - ours_in_suit[index + 1] == 1'000'000) {
+            std::sort(live_in_suit.begin(), live_in_suit.end(),
+                      [](const LiveRank& left, const LiveRank& right) {
+                          return left.rank > right.rank;
+                      });
+            for (std::size_t index = 0; index + 1 < live_in_suit.size(); ++index) {
+                if (live_in_suit[index].owner == me &&
+                    live_in_suit[index + 1].owner == me) {
                     leading_sequence = true;
-                    sequence_top = ours_in_suit[index];
+                    sequence_top = live_in_suit[index].rank;
                     break;
                 }
             }
         }
         // Lead a high card to swallow an opponent's singleton intermediate
-        // when the partner owns the next link below it. For example, J from
-        // J9 opposite T drops a singleton 10.142857 and promotes the T.
+        // when our side owns the next link below it. For example, J from J9
+        // opposite T, or from JT in one hand, drops a forced singleton
+        // 10.142857 and promotes the T.
         bool drops_singleton = false;
         if (suit < 4U &&
             (card->kind() == CardKind::Normal ||
              card->kind() == CardKind::Floating)) {
             const long long candidate_rank = card->rank().millionths();
-            long long partner_link = -1;
-            for (const CardId id : position.hand(partner)) {
-                const Card* held = position.card(id);
-                if (held == nullptr || !in_suit(*held, static_cast<int>(suit)) ||
-                    (held->kind() != CardKind::Normal &&
-                     held->kind() != CardKind::Floating)) {
-                    continue;
+            long long side_link = -1;
+            for (const Seat side_seat : {me, partner}) {
+                for (const CardId id : position.hand(side_seat)) {
+                    if (id == card->id()) continue;
+                    const Card* held = position.card(id);
+                    if (held == nullptr || !in_suit(*held, static_cast<int>(suit)) ||
+                        (held->kind() != CardKind::Normal &&
+                         held->kind() != CardKind::Floating)) {
+                        continue;
+                    }
+                    const long long rank = held->rank().millionths();
+                    if (rank < candidate_rank) side_link = std::max(side_link, rank);
                 }
-                const long long rank = held->rank().millionths();
-                if (rank < candidate_rank) partner_link = std::max(partner_link, rank);
             }
             int intermediate_count = 0;
             Seat intermediate_holder = me;
@@ -1139,13 +1156,13 @@ auto full_info_lead(
                         continue;
                     }
                     const long long rank = held->rank().millionths();
-                    if (rank > partner_link && rank < candidate_rank) {
+                    if (rank > side_link && rank < candidate_rank) {
                         ++intermediate_count;
                         intermediate_holder = opponent;
                     }
                 }
             }
-            if (partner_link >= 0 && intermediate_count == 1) {
+            if (side_link >= 0 && intermediate_count == 1) {
                 int holder_length = 0;
                 for (const CardId id : position.hand(intermediate_holder)) {
                     const Card* held = position.card(id);

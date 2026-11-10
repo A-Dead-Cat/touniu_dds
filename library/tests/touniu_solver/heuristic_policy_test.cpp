@@ -251,5 +251,40 @@ TEST(HeuristicPolicyTest, FullInformationLeadUsesJackWithTenInTheSameHand)
     EXPECT_EQ(chosen.card_id(), CardId{50});
 }
 
+TEST(HeuristicPolicyTest, FloatingCardBreaksJackTenSequenceWhenItCannotBeDropped)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 3;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(70, Suit::Spades, 11),
+        card(71, Suit::Spades, 10),
+        card(72, Suit::Spades, 3),
+    };
+    const auto intermediate = Rank::floating(10'142'857);
+    ASSERT_TRUE(intermediate.has_value());
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        Card::floating(CardId{73}, Suit::Spades, *intermediate),
+        card(74, Suit::Spades, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(75, Suit::Spades, 7),
+        card(76, Suit::Spades, 4),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(77, Suit::Spades, 12),
+        card(78, Suit::Spades, 9),
+        card(79, Suit::Spades, 8),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{72});
+}
+
 }  // namespace
 }  // namespace touniu_solver
