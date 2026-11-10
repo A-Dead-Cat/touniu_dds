@@ -283,6 +283,13 @@ auto is_plain_single_suit(const Card& card) -> bool
            card.intrinsic_suits().size() == 1U;
 }
 
+auto is_compact_single_family(const Card& card) -> bool
+{
+    return is_plain_single_suit(card) || card.kind() == CardKind::BigJoker ||
+           card.kind() == CardKind::SmallJoker ||
+           card.kind() == CardKind::NoTrump;
+}
+
 auto suit_index(const Suit suit) -> std::size_t
 {
     return static_cast<std::size_t>(suit);
@@ -370,6 +377,8 @@ void Position::update_holdings(
     if (card->trump_bit != 0xFFU) {
         const std::uint64_t bit = std::uint64_t{1} << card->trump_bit;
         target[4] = set ? target[4] | bit : target[4] & ~bit;
+        owner_of_[4][card->trump_bit] =
+            set ? static_cast<std::uint8_t>(seat) : 0xFFU;
     }
 }
 
@@ -579,7 +588,7 @@ void Position::rebuild_universe()
     shareable_identity_ = universe_.predicted_ids.empty();
     for (const UniverseCard& entry : universe_.cards) {
         const Card* definition = state_.card(CardId{entry.id});
-        if (definition == nullptr || !is_plain_single_suit(*definition)) {
+        if (definition == nullptr || !is_compact_single_family(*definition)) {
             shareable_identity_ = false;
             break;
         }
@@ -587,7 +596,7 @@ void Position::rebuild_universe()
     for (int seat = 0; seat < 4 && shareable_identity_; ++seat) {
         for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
             const Card* definition = state_.card(id);
-            if (definition == nullptr || !is_plain_single_suit(*definition)) {
+            if (definition == nullptr || !is_compact_single_family(*definition)) {
                 shareable_identity_ = false;
                 break;
             }
@@ -686,7 +695,7 @@ auto Position::compact_plain_tail() const -> std::optional<Position>
         }
         for (const CardId id : cards) {
             const Card* definition = state_.card(id);
-            if (definition == nullptr || !is_plain_single_suit(*definition)) {
+            if (definition == nullptr || !is_compact_single_family(*definition)) {
                 return std::nullopt;
             }
         }
@@ -848,6 +857,22 @@ void Position::legal_actions_fast(ActionList& out) const
                 ? universe_.trump_cards[bit] : universe_.ids[bucket][bit]},
             mode, suit));
     };
+    const bool no_trump = state_.contract() == Contract::NoTrump;
+    const std::size_t trump_index = no_trump ? 4U
+        : suit_index(static_cast<Suit>(static_cast<int>(state_.contract())));
+    // Jokers and NT cards share bucket four. In a suit contract jokers join
+    // the contract trump family while NT cards remain the fifth suit; in a
+    // no-trump contract both belong to the NT trump family.
+    const auto effective_family = [this, no_trump, trump_index](
+                                      const std::size_t bucket,
+                                      const std::uint8_t bit) {
+        if (bucket != 4U || no_trump) {
+            return bucket;
+        }
+        const bool joker =
+            (universe_.joker_mask & (std::uint64_t{1} << bit)) != 0U;
+        return joker ? trump_index : 4U;
+    };
     const std::uint32_t count = fast_order_count_[index];
     if (fast_trick_size_ == 0U) {
         for (std::uint32_t order = 0; order < count; ++order) {
@@ -857,7 +882,9 @@ void Position::legal_actions_fast(ActionList& out) const
             if (((fast_hands_[index][bucket] >> bit) & 1U) == 0U) {
                 continue;
             }
-            emit(slot, PlayMode::Lead, static_cast<Suit>(bucket));
+            emit(
+                slot, PlayMode::Lead,
+                static_cast<Suit>(effective_family(bucket, bit)));
         }
         return;
     }
@@ -868,11 +895,19 @@ void Position::legal_actions_fast(ActionList& out) const
             break;
         }
     }
-    const bool has_led_suit = led_index < 4U &&
-        fast_hands_[index][led_index] != 0U;
-    const bool no_trump = state_.contract() == Contract::NoTrump;
-    const std::size_t trump_index = no_trump ? 4U
-        : suit_index(static_cast<Suit>(static_cast<int>(state_.contract())));
+    bool has_led_suit = false;
+    if (led_index == 4U) {
+        const std::uint64_t nt_cards = no_trump
+            ? fast_hands_[index][4]
+            : fast_hands_[index][4] & ~universe_.joker_mask;
+        has_led_suit = nt_cards != 0U;
+    } else {
+        has_led_suit = fast_hands_[index][led_index] != 0U;
+        if (led_index == trump_index) {
+            has_led_suit = has_led_suit ||
+                (fast_hands_[index][4] & universe_.joker_mask) != 0U;
+        }
+    }
     for (std::uint32_t order = 0; order < count; ++order) {
         const std::uint32_t slot = fast_order_[index][order];
         const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
@@ -881,14 +916,15 @@ void Position::legal_actions_fast(ActionList& out) const
             continue;
         }
         if (has_led_suit) {
-            if (bucket != led_index) {
+            if (effective_family(bucket, bit) != led_index) {
                 continue;
             }
             emit(slot, PlayMode::Follow, static_cast<Suit>(led_index));
         } else {
-            const bool trump = !no_trump && bucket == trump_index;
+            const std::size_t family = effective_family(bucket, bit);
+            const bool trump = family == trump_index;
             emit(slot, trump ? PlayMode::Trump : PlayMode::Discard,
-                 static_cast<Suit>(bucket));
+                 static_cast<Suit>(family));
         }
     }
 }
@@ -902,8 +938,7 @@ auto Position::resolve_trick_fast() const -> Seat
             break;
         }
     }
-    const bool no_trump = state_.contract() == Contract::NoTrump;
-    const std::size_t trump_index = no_trump ? 4U
+    const std::size_t trump_index = state_.contract() == Contract::NoTrump ? 4U
         : suit_index(static_cast<Suit>(static_cast<int>(state_.contract())));
     Seat winner = fast_trick_[0].seat;
     int best_class = -1;
@@ -916,8 +951,12 @@ auto Position::resolve_trick_fast() const -> Seat
         const std::uint32_t slot = fast_slot(*entry.action.card_id());
         const std::uint8_t bucket = static_cast<std::uint8_t>(slot >> 8U);
         const std::uint8_t bit = static_cast<std::uint8_t>(slot & 0xFFU);
-        const int card_class = (!no_trump && bucket == trump_index)
-            ? 3 : (bucket == led_index ? 2 : 0);
+        const bool joker = bucket == 4U &&
+            (universe_.joker_mask & (std::uint64_t{1} << bit)) != 0U;
+        const std::size_t family = bucket == 4U && joker
+            ? trump_index : bucket;
+        const int card_class = family == trump_index
+            ? 3 : (family == led_index ? 2 : 0);
         const std::int32_t rank = fast_rank(bucket, bit);
         if (card_class > best_class ||
             (card_class == best_class && rank > best_rank)) {
@@ -1253,8 +1292,9 @@ auto Position::has_shareable_identity() const -> bool
 auto Position::table_identity() const -> PositionIdentity
 {
     if (!has_shareable_identity()) {
-        return identity_;
+        return identity();
     }
+    const Trick& trick = current_trick();
     // Only the relative order of the live cards and their owners matters, so
     // the key walks the live buckets in rank order and records the run of
     // owners. Retired cards vanish from the walk, which is what lets two
@@ -1272,9 +1312,15 @@ auto Position::table_identity() const -> PositionIdentity
         while (live != 0) {
             const int bit = 63 - std::countl_zero(live);
             live &= ~(std::uint64_t{1} << static_cast<std::uint8_t>(bit));
+            // Bucket four can contain two different effective families in a
+            // suit contract: jokers belong to trumps while NT cards remain
+            // the independent fifth suit. Preserve its exact universe bit so
+            // retiring one family can never alias a state from the other.
+            const std::uint32_t rank_token = bucket == 4U
+                ? static_cast<std::uint32_t>(bit) : dense;
             const std::uint64_t token =
                 (static_cast<std::uint64_t>(bucket) << 32U) |
-                (static_cast<std::uint64_t>(dense) << 8U) |
+                (static_cast<std::uint64_t>(rank_token) << 8U) |
                 owner_of_[bucket][static_cast<std::size_t>(bit)];
             mix(primary, verifier, token);
             ++dense;
@@ -1294,20 +1340,20 @@ auto Position::table_identity() const -> PositionIdentity
             pending_block_.has_value()
                 ? static_cast<std::uint8_t>(*pending_block_) : 7U) << 4U) |
         (state_.draw_index() & 0x0FU));
-    for (const TrickPlay& play : current_trick_) {
+    for (const TrickPlay& play : trick) {
         std::uint64_t token =
             (static_cast<std::uint64_t>(play.seat) << 56U) |
             (static_cast<std::uint64_t>(play.action.is_pass() ? 1U : 0U) << 55U);
         if (!play.action.is_pass()) {
             const Card* card = state_.card(*play.action.card_id());
             if (card == nullptr || card->intrinsic_suits().size() != 1U) {
-                return identity_;
+                return identity();
             }
             const std::size_t suit = suit_index(card->intrinsic_suits().front());
             const std::optional<std::uint8_t> bit =
                 universe_bit(card->id(), static_cast<Suit>(suit));
             if (!bit.has_value()) {
-                return identity_;
+                return identity();
             }
             const std::uint64_t above =
                 live_mask_[suit] & ~((std::uint64_t{2}

@@ -1042,6 +1042,147 @@ TEST(PositionTest, CompactOperationsMatchTheGeneralPath)
     }
 }
 
+TEST(PositionTest, CompactOperationsMatchGeneralPathWithJokers)
+{
+    for (const Contract contract : {Contract::Spades, Contract::NoTrump}) {
+        Scenario scenario;
+        scenario.contract = contract;
+        scenario.next_player = Seat::West;
+        scenario.tricks_remaining = 2;
+        scenario.hands[static_cast<int>(Seat::West)] = {
+            Card::small_joker(CardId{1}),
+            normal_card(2, Suit::Hearts, 2),
+        };
+        scenario.hands[static_cast<int>(Seat::North)] = {
+            normal_card(3, Suit::Spades, 2),
+            normal_card(4, Suit::Hearts, 3),
+        };
+        scenario.hands[static_cast<int>(Seat::East)] = {
+            Card::big_joker(CardId{5}),
+            normal_card(6, Suit::Spades, 3),
+        };
+        scenario.hands[static_cast<int>(Seat::South)] = {
+            normal_card(7, Suit::Spades, 4),
+            normal_card(8, Suit::Hearts, 4),
+        };
+
+        auto compact = Position::create(scenario);
+        set_compact_operations_disabled_for_testing(true);
+        auto general = Position::create(scenario);
+        set_compact_operations_disabled_for_testing(false);
+        ASSERT_TRUE(compact.has_value());
+        ASSERT_TRUE(general.has_value());
+        ASSERT_TRUE(compact->uses_compact_operations());
+
+        for (int ply = 0; ply < 8; ++ply) {
+            const std::vector<Action> compact_actions = compact->legal_actions();
+            const std::vector<Action> general_actions = general->legal_actions();
+            ASSERT_EQ(compact_actions, general_actions)
+                << "contract " << static_cast<int>(contract)
+                << " ply " << ply;
+            if (compact_actions.empty()) {
+                break;
+            }
+            const std::size_t choice = ply == 0
+                ? static_cast<std::size_t>(std::find_if(
+                      compact_actions.begin(), compact_actions.end(),
+                      [](const Action& action) {
+                          return action.card_id() == CardId{1};
+                      }) - compact_actions.begin())
+                : 0U;
+            ASSERT_LT(choice, compact_actions.size());
+            ASSERT_TRUE(compact->apply(compact_actions[choice]));
+            ASSERT_TRUE(general->apply(general_actions[choice]));
+            const PositionIdentity compact_key = compact->table_identity();
+            const PositionIdentity general_key = general->table_identity();
+            EXPECT_EQ(compact_key.primary, general_key.primary);
+            EXPECT_EQ(compact_key.verifier, general_key.verifier);
+            EXPECT_EQ(compact->next_player(), general->next_player());
+            EXPECT_EQ(compact->tricks_remaining(), general->tricks_remaining());
+            for (int seat = 0; seat < 4; ++seat) {
+                EXPECT_EQ(
+                    compact->tricks_won(static_cast<Seat>(seat)),
+                    general->tricks_won(static_cast<Seat>(seat)));
+            }
+        }
+    }
+}
+
+TEST(PositionTest, CompactOperationsMatchGeneralPathWithNoTrumpSuitCards)
+{
+    for (const Contract contract : {Contract::Spades, Contract::NoTrump}) {
+        Scenario scenario;
+        scenario.contract = contract;
+        scenario.next_player = Seat::West;
+        scenario.tricks_remaining = 2;
+        scenario.hands[static_cast<int>(Seat::West)] = {
+            Card::no_trump(CardId{1}, Rank::integer(10)),
+            normal_card(2, Suit::Hearts, 2),
+        };
+        scenario.hands[static_cast<int>(Seat::North)] = {
+            Card::small_joker(CardId{3}),
+            Card::no_trump(CardId{4}, Rank::integer(5)),
+        };
+        scenario.hands[static_cast<int>(Seat::East)] = {
+            Card::big_joker(CardId{5}),
+            normal_card(6, Suit::Spades, 3),
+        };
+        scenario.hands[static_cast<int>(Seat::South)] = {
+            Card::no_trump(CardId{7}, Rank::integer(8)),
+            normal_card(8, Suit::Hearts, 4),
+        };
+
+        auto compact = Position::create(scenario);
+        set_compact_operations_disabled_for_testing(true);
+        auto general = Position::create(scenario);
+        set_compact_operations_disabled_for_testing(false);
+        ASSERT_TRUE(compact.has_value());
+        ASSERT_TRUE(general.has_value());
+        ASSERT_TRUE(compact->uses_compact_operations());
+
+        for (int ply = 0; ply < 8; ++ply) {
+            const std::vector<Action> compact_actions = compact->legal_actions();
+            const std::vector<Action> general_actions = general->legal_actions();
+            ASSERT_EQ(compact_actions, general_actions)
+                << "contract " << static_cast<int>(contract)
+                << " ply " << ply;
+            if (ply == 1 && contract == Contract::Spades) {
+                ASSERT_EQ(compact_actions.size(), 1U);
+                EXPECT_EQ(compact_actions.front().card_id(), CardId{4});
+            }
+            if (ply == 1 && contract == Contract::NoTrump) {
+                ASSERT_EQ(compact_actions.size(), 2U);
+                EXPECT_EQ(compact_actions[0].card_id(), CardId{3});
+                EXPECT_EQ(compact_actions[1].card_id(), CardId{4});
+            }
+            if (compact_actions.empty()) {
+                break;
+            }
+            const std::size_t choice = ply == 0
+                ? static_cast<std::size_t>(std::find_if(
+                      compact_actions.begin(), compact_actions.end(),
+                      [](const Action& action) {
+                          return action.card_id() == CardId{1};
+                      }) - compact_actions.begin())
+                : 0U;
+            ASSERT_LT(choice, compact_actions.size());
+            ASSERT_TRUE(compact->apply(compact_actions[choice]));
+            ASSERT_TRUE(general->apply(general_actions[choice]));
+            const PositionIdentity compact_key = compact->table_identity();
+            const PositionIdentity general_key = general->table_identity();
+            EXPECT_EQ(compact_key.primary, general_key.primary);
+            EXPECT_EQ(compact_key.verifier, general_key.verifier);
+            EXPECT_EQ(compact->next_player(), general->next_player());
+            EXPECT_EQ(compact->tricks_remaining(), general->tricks_remaining());
+            for (int seat = 0; seat < 4; ++seat) {
+                EXPECT_EQ(
+                    compact->tricks_won(static_cast<Seat>(seat)),
+                    general->tricks_won(static_cast<Seat>(seat)));
+            }
+        }
+    }
+}
+
 TEST(PositionTest, ShareableIdentityMergesEquivalentCardsAfterATrick)
 {
     auto leading_two = Position::create(ladder_scenario());
@@ -1087,11 +1228,43 @@ TEST(PositionTest, ShareableIdentitySeparatesOwnership)
         straight_key.verifier == mixed_key.verifier);
 }
 
-TEST(PositionTest, ShareableIdentityIsUnavailableForSpecialCards)
+TEST(PositionTest, ShareableIdentitySeparatesJokerOwnership)
+{
+    Scenario west_joker;
+    west_joker.contract = Contract::NoTrump;
+    west_joker.next_player = Seat::West;
+    west_joker.tricks_remaining = 1;
+    west_joker.hands[static_cast<int>(Seat::West)] = {
+        Card::big_joker(CardId{1}),
+    };
+    west_joker.hands[static_cast<int>(Seat::North)] = {
+        normal_card(2, Suit::Spades, 2),
+    };
+    Scenario north_joker = west_joker;
+    north_joker.hands[static_cast<int>(Seat::West)].clear();
+    north_joker.hands[static_cast<int>(Seat::North)].insert(
+        north_joker.hands[static_cast<int>(Seat::North)].begin(),
+        Card::big_joker(CardId{1}));
+
+    auto west = Position::create(west_joker);
+    auto north = Position::create(north_joker);
+    ASSERT_TRUE(west.has_value());
+    ASSERT_TRUE(north.has_value());
+    ASSERT_TRUE(west->has_shareable_identity());
+    ASSERT_TRUE(north->has_shareable_identity());
+
+    const PositionIdentity west_key = west->table_identity();
+    const PositionIdentity north_key = north->table_identity();
+    EXPECT_FALSE(
+        west_key.primary == north_key.primary &&
+        west_key.verifier == north_key.verifier);
+}
+
+TEST(PositionTest, ShareableIdentityIsUnavailableForEffectCards)
 {
     Scenario scenario = ladder_scenario();
     scenario.hands[static_cast<int>(Seat::South)].push_back(
-        Card::big_joker(CardId{9}));
+        Card::plus_two(CardId{9}, Suit::Spades));
     scenario.tricks_remaining = 2;
     auto position = Position::create(scenario);
     ASSERT_TRUE(position.has_value());
