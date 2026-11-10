@@ -974,6 +974,7 @@ auto full_info_lead(
     const Action* best = nullptr;
     double best_score = -1e9;
     const Card* best_card = nullptr;
+    bool best_drops_singleton = false;
     for (const Action& action : legal) {
         if (action.is_pass() || !action.card_id().has_value()) continue;
         const Card* card = position.card(*action.card_id());
@@ -1108,6 +1109,54 @@ auto full_info_lead(
                 }
             }
         }
+        // Lead a high card to swallow an opponent's singleton intermediate
+        // when the partner owns the next link below it. For example, J from
+        // J9 opposite T drops a singleton 10.142857 and promotes the T.
+        bool drops_singleton = false;
+        if (suit < 4U &&
+            (card->kind() == CardKind::Normal ||
+             card->kind() == CardKind::Floating)) {
+            const long long candidate_rank = card->rank().millionths();
+            long long partner_link = -1;
+            for (const CardId id : position.hand(partner)) {
+                const Card* held = position.card(id);
+                if (held == nullptr || !in_suit(*held, static_cast<int>(suit)) ||
+                    (held->kind() != CardKind::Normal &&
+                     held->kind() != CardKind::Floating)) {
+                    continue;
+                }
+                const long long rank = held->rank().millionths();
+                if (rank < candidate_rank) partner_link = std::max(partner_link, rank);
+            }
+            int intermediate_count = 0;
+            Seat intermediate_holder = me;
+            for (const Seat opponent : opponents) {
+                for (const CardId id : position.hand(opponent)) {
+                    const Card* held = position.card(id);
+                    if (held == nullptr || !in_suit(*held, static_cast<int>(suit)) ||
+                        (held->kind() != CardKind::Normal &&
+                         held->kind() != CardKind::Floating)) {
+                        continue;
+                    }
+                    const long long rank = held->rank().millionths();
+                    if (rank > partner_link && rank < candidate_rank) {
+                        ++intermediate_count;
+                        intermediate_holder = opponent;
+                    }
+                }
+            }
+            if (partner_link >= 0 && intermediate_count == 1) {
+                int holder_length = 0;
+                for (const CardId id : position.hand(intermediate_holder)) {
+                    const Card* held = position.card(id);
+                    if (held != nullptr &&
+                        in_suit(*held, static_cast<int>(suit))) {
+                        ++holder_length;
+                    }
+                }
+                drops_singleton = holder_length == 1;
+            }
+        }
         // Attacking a suit the opponents still hold stoppers in is slow: price
         // the trick they keep winning there.
         {
@@ -1122,6 +1171,11 @@ auto full_info_lead(
             const bool wanted = card->rank().millionths() == sequence_top;
             const bool best_wanted = best_card->rank().millionths() == sequence_top;
             if (wanted != best_wanted) better_card = wanted;
+        }
+        if (best_card != nullptr && suit < 4U &&
+            in_suit(*best_card, static_cast<int>(suit)) &&
+            drops_singleton != best_drops_singleton) {
+            better_card = drops_singleton;
         }
         if (std::getenv("TUONIU_DEBUG_SCORES") != nullptr) {
             std::fprintf(stderr, "  option suit=%d rank=%d score=%.2f\n",
@@ -1142,6 +1196,7 @@ auto full_info_lead(
             best_score = score;
             best = &action;
             best_card = card;
+            best_drops_singleton = drops_singleton;
         }
     }
     if (best_score_out != nullptr) *best_score_out = best_score;
@@ -2382,6 +2437,29 @@ auto heuristic_action(
                 card_rank_micro(duck) >= 9'000'000 ||
                 card_rank_micro(forcing_cover_card) < 9'000'000) {
                 forcing_cover = nullptr;
+            }
+            // Do not spend the only cover for a card retained by an opponent
+            // who has already played to this trick. Forcing the fourth hand's
+            // higher card would promote that cross-hand intermediate control.
+            if (forcing_cover != nullptr) {
+                const long long forcing_rank =
+                    effective_rank_micro(position, forcing_cover_card);
+                for (int seat = 0; seat < 4 && forcing_cover != nullptr; ++seat) {
+                    const Seat who = static_cast<Seat>(seat);
+                    if (who == me || who == partner ||
+                        behind[static_cast<std::size_t>(seat)]) {
+                        continue;
+                    }
+                    for (const CardId id : position.hand(who)) {
+                        const Card* held = position.card(id);
+                        if (held == nullptr || !in_suit(*held, led_suit)) continue;
+                        const long long rank = effective_rank_micro(position, held);
+                        if (rank > top_now && rank < forcing_rank) {
+                            forcing_cover = nullptr;
+                            break;
+                        }
+                    }
+                }
             }
         }
 
