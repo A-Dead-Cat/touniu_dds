@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -15,6 +16,7 @@ enum class Partnership {
 };
 
 struct SearchStats {
+    std::uint64_t table_slots = 0;
     std::uint64_t nodes = 0;
     std::uint64_t table_queries = 0;
     std::uint64_t table_hits = 0;
@@ -71,6 +73,9 @@ struct SearchOptions {
     // after a completed trick. Switch that subtree to compact bitmasks;
     // unequal hand sizes and empty-hand PASS remain supported.
     bool use_compact_plain_tail = true;
+    // Non-zero overrides the automatic request-local transposition-table
+    // capacity. Primarily used for reproducible memory/speed benchmarks.
+    std::size_t table_slots_override = 0U;
 };
 
 struct SearchResult {
@@ -130,6 +135,14 @@ auto solve_contract_batch(
 auto contract_table_slots(
     const Position& position,
     ContractTableCapacity capacity) -> std::size_t;
+
+// Pure policy used by the runtime memory detector and by tests. Complex
+// eight-card-or-larger analyses use 2^24 slots only when the available memory
+// per concurrently active analysis is safely above the 512 MiB table itself.
+auto analysis_table_slots_for_memory(
+    const Position& position,
+    std::size_t available_memory_bytes,
+    std::size_t active_analyses) -> std::size_t;
 
 // Conservative equivalence predicate used by the search. Exposed for tests; it
 // never reports equivalence when a special, multi-suit or +2 card remains able

@@ -782,6 +782,32 @@ TEST(SearchTest, ContractTableSlotsFollowCardCountAndMemoryTier)
     EXPECT_EQ(slots(7, ContractTableCapacity::LowMemory), 1U << 20U);
 }
 
+TEST(SearchTest, AnalysisTableUsesLargeTierOnlyForMemorySafeSpecialDeals)
+{
+    Scenario complex = tier_scenario(8);
+    complex.hands[0][0] = Card::block(CardId{1}, Suit::Spades);
+    complex.hands[1][0] = Card::reverse(CardId{2}, Suit::Spades);
+    auto special = Position::create(complex);
+    auto ordinary = Position::create(tier_scenario(8));
+    ASSERT_TRUE(special.has_value());
+    ASSERT_TRUE(ordinary.has_value());
+
+    constexpr std::size_t one_gib = std::size_t{1} << 30U;
+    constexpr std::size_t two_gib = std::size_t{2} << 30U;
+    EXPECT_EQ(
+        analysis_table_slots_for_memory(*special, one_gib, 1U),
+        1U << 23U);
+    EXPECT_EQ(
+        analysis_table_slots_for_memory(*special, two_gib, 1U),
+        1U << 24U);
+    EXPECT_EQ(
+        analysis_table_slots_for_memory(*special, two_gib, 2U),
+        1U << 23U);
+    EXPECT_EQ(
+        analysis_table_slots_for_memory(*ordinary, two_gib, 1U),
+        1U << 23U);
+}
+
 TEST(SearchTest, DeterministicOrderingKeepsCanonicalBestAction)
 {
     for (int deal_index = 0; deal_index < 4; ++deal_index) {
@@ -824,6 +850,65 @@ auto special_pool() -> std::vector<Card>
     pool.push_back(Card::small_joker(CardId{id++}));
     pool.push_back(Card::no_trump(CardId{id++}, Rank::integer(16)));
     return pool;
+}
+
+TEST(SearchTest, HybridTableKeyMatchesOracleOnSpecialDeals)
+{
+    const std::vector<Card> pool = special_pool();
+    for (std::uint32_t seed = 1; seed <= 16; ++seed) {
+        std::vector<Card> shuffled = pool;
+        std::uint32_t state = seed * 2654435761U + 17U;
+        for (std::size_t index = shuffled.size(); index > 1; --index) {
+            state ^= state << 13U;
+            state ^= state >> 17U;
+            state ^= state << 5U;
+            std::swap(shuffled[index - 1], shuffled[state % index]);
+        }
+        Scenario scenario;
+        scenario.contract = static_cast<Contract>(seed % 5U);
+        scenario.next_player = static_cast<Seat>(seed % 4U);
+        scenario.tricks_remaining = 2;
+        for (std::size_t slot = 0; slot < 8; ++slot) {
+            scenario.hands[slot % 4].push_back(shuffled[slot]);
+        }
+
+        auto hybrid = Position::create(scenario);
+        auto exact = Position::create(scenario);
+        auto reference = Position::create(scenario);
+        ASSERT_TRUE(hybrid.has_value());
+        ASSERT_TRUE(exact.has_value());
+        ASSERT_TRUE(reference.has_value());
+
+        SearchOptions hybrid_options;
+        SearchOptions exact_options;
+        exact_options.use_shareable_identity = false;
+        const int hybrid_value = solve(
+            *hybrid, Partnership::NorthSouth, hybrid_options).tricks;
+        const int exact_value = solve(
+            *exact, Partnership::NorthSouth, exact_options).tricks;
+        const int oracle_value = oracle(*reference, Partnership::NorthSouth);
+        EXPECT_EQ(hybrid_value, oracle_value) << "seed " << seed;
+        EXPECT_EQ(exact_value, oracle_value) << "seed " << seed;
+    }
+}
+
+TEST(SearchTest, ExplicitTableCapacityKeepsExactValue)
+{
+    const Scenario scenario = shared_scenario();
+    auto constrained = Position::create(scenario);
+    auto reference = Position::create(scenario);
+    ASSERT_TRUE(constrained.has_value());
+    ASSERT_TRUE(reference.has_value());
+
+    SearchStats stats;
+    SearchOptions options;
+    options.stats = &stats;
+    options.table_slots_override = 4U;
+    const int actual = solve(
+        *constrained, Partnership::NorthSouth, options).tricks;
+    const int expected = oracle(*reference, Partnership::NorthSouth);
+    EXPECT_EQ(actual, expected);
+    EXPECT_EQ(stats.table_slots, 4U);
 }
 
 TEST(SearchTest, LeaderSureTricksNeverExceedsTheOracleOnSpecialDeals)

@@ -1200,6 +1200,27 @@ TEST(PositionTest, ShareableIdentityMergesEquivalentCardsAfterATrick)
     EXPECT_EQ(two_key.verifier, three_key.verifier);
 }
 
+TEST(PositionTest, HybridIdentityCompressesPlainCardsWhileEffectRemains)
+{
+    Scenario scenario = ladder_scenario();
+    scenario.hands[static_cast<int>(Seat::South)].push_back(
+        Card::reverse(CardId{9}, Suit::Spades));
+    auto leading_two = Position::create(scenario);
+    auto leading_three = Position::create(scenario);
+    ASSERT_TRUE(leading_two.has_value());
+    ASSERT_TRUE(leading_three.has_value());
+
+    EXPECT_TRUE(leading_two->has_shareable_identity());
+    EXPECT_FALSE(leading_two->uses_compact_operations());
+    play_single_trick(*leading_two, 1);
+    play_single_trick(*leading_three, 2);
+
+    const PositionIdentity two_key = leading_two->table_identity();
+    const PositionIdentity three_key = leading_three->table_identity();
+    EXPECT_EQ(two_key.primary, three_key.primary);
+    EXPECT_EQ(two_key.verifier, three_key.verifier);
+}
+
 TEST(PositionTest, ShareableIdentitySeparatesOwnership)
 {
     // Same ranks remain, but the five belongs to East and the seven to North.
@@ -1260,7 +1281,7 @@ TEST(PositionTest, ShareableIdentitySeparatesJokerOwnership)
         west_key.verifier == north_key.verifier);
 }
 
-TEST(PositionTest, ShareableIdentityIsUnavailableForEffectCards)
+TEST(PositionTest, HybridIdentityDoesNotEnableCompactEffectOperations)
 {
     Scenario scenario = ladder_scenario();
     scenario.hands[static_cast<int>(Seat::South)].push_back(
@@ -1268,11 +1289,8 @@ TEST(PositionTest, ShareableIdentityIsUnavailableForEffectCards)
     scenario.tricks_remaining = 2;
     auto position = Position::create(scenario);
     ASSERT_TRUE(position.has_value());
-    EXPECT_FALSE(position->has_shareable_identity());
-    // The fallback key must still be the exact incremental identity.
-    const auto key = position->table_identity();
-    EXPECT_EQ(key.primary, position->identity().primary);
-    EXPECT_EQ(key.verifier, position->identity().verifier);
+    EXPECT_TRUE(position->has_shareable_identity());
+    EXPECT_FALSE(position->uses_compact_operations());
 }
 
 }  // namespace

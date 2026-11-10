@@ -25,6 +25,52 @@ void add_suit(
     }
 }
 
+auto play_card(Position& position, const CardId id) -> bool
+{
+    for (const Action& action : position.legal_actions()) {
+        if (!action.is_pass() && action.card_id() == id) {
+            return position.apply(action);
+        }
+    }
+    return false;
+}
+
+auto third_hand_spade_position(const bool partner_has_nine)
+    -> std::optional<Position>
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(1, Suit::Spades, 3),
+    };
+    if (partner_has_nine) {
+        scenario.hands[static_cast<std::size_t>(Seat::West)].push_back(
+            card(2, Suit::Spades, 9));
+    }
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(3, Suit::Hearts, 3),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(4, Suit::Spades, 10),
+        card(5, Suit::Spades, 7),
+        card(6, Suit::Spades, 4),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(7, Suit::Spades, 12),
+        card(8, Suit::Spades, 8),
+    };
+
+    auto position = Position::create(scenario);
+    if (!position.has_value() ||
+        !play_card(*position, CardId{1}) ||
+        !play_card(*position, CardId{3})) {
+        return std::nullopt;
+    }
+    return position;
+}
+
 TEST(HeuristicPolicyTest, FullInformationLeadAvoidsDeclarersLongSuitWhenDummyIsVoid)
 {
     Scenario scenario;
@@ -63,6 +109,26 @@ TEST(HeuristicPolicyTest, FullInformationLeadAvoidsDeclarersLongSuitWhenDummyIsV
     ASSERT_NE(chosen_card, nullptr);
     ASSERT_EQ(chosen_card->intrinsic_suits().size(), 1U);
     EXPECT_NE(chosen_card->intrinsic_suits().front(), Suit::Hearts);
+}
+
+TEST(HeuristicPolicyTest, ThirdHandForcesTheQueensCoverToEstablishPartnersNine)
+{
+    auto position = third_hand_spade_position(true);
+    ASSERT_TRUE(position.has_value());
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{4});
+}
+
+TEST(HeuristicPolicyTest, ThirdHandForcesTheQueensCoverWithoutPartnersNine)
+{
+    auto position = third_hand_spade_position(false);
+    ASSERT_TRUE(position.has_value());
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{4});
 }
 
 }  // namespace

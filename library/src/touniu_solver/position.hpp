@@ -229,9 +229,12 @@ private:
     mutable std::array<std::vector<CardId>, 4> hand_cache_;
     mutable bool hand_cache_valid_ = false;
     mutable bool identity_valid_ = true;
-    // True when the deal universe is only ordinary single-suit cards, which is
-    // what makes the rank-compressed table key sound.
+    // True when a verified hybrid table key is available. Ordinary ranks are
+    // compressed while effect and multi-suit cards remain exact.
     bool shareable_identity_ = false;
+    // Compact make/undo has stricter requirements than the hybrid table key:
+    // every live card must belong to one deterministic, effect-free family.
+    bool compact_operations_eligible_ = false;
     // Owner of each universe bucket bit: seat index, or 0xFF when the card is
     // in the current trick or not in any hand.
     std::array<std::array<std::uint8_t, 64>, 5> owner_of_{};

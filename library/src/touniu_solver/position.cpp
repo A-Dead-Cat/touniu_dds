@@ -393,6 +393,7 @@ void Position::rebuild_universe()
         bucket.fill(0xFFU);
     }
     shareable_identity_ = false;
+    compact_operations_eligible_ = false;
 
     std::size_t plus_two_count = 0;
     for (int seat = 0; seat < 4; ++seat) {
@@ -585,19 +586,19 @@ void Position::rebuild_universe()
 
     live_mask_ = universe_.masks;
     universe_.enabled = true;
-    shareable_identity_ = universe_.predicted_ids.empty();
+    shareable_identity_ = !universe_.trump_overflow;
+    compact_operations_eligible_ = universe_.predicted_ids.empty();
     for (const UniverseCard& entry : universe_.cards) {
         const Card* definition = state_.card(CardId{entry.id});
         if (definition == nullptr || !is_compact_single_family(*definition)) {
-            shareable_identity_ = false;
-            break;
+            compact_operations_eligible_ = false;
         }
     }
-    for (int seat = 0; seat < 4 && shareable_identity_; ++seat) {
+    for (int seat = 0; seat < 4 && compact_operations_eligible_; ++seat) {
         for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
             const Card* definition = state_.card(id);
             if (definition == nullptr || !is_compact_single_family(*definition)) {
-                shareable_identity_ = false;
+                compact_operations_eligible_ = false;
                 break;
             }
         }
@@ -794,7 +795,7 @@ void Position::build_fast_state()
     for (auto& order : fast_order_) {
         order.fill(0U);
     }
-    if (!has_shareable_identity() || compact_operations_disabled_for_testing) {
+    if (!compact_operations_eligible_ || compact_operations_disabled_for_testing) {
         return;
     }
     for (std::size_t bucket = 0; bucket < 5U; ++bucket) {
@@ -1340,14 +1341,52 @@ auto Position::table_identity() const -> PositionIdentity
             pending_block_.has_value()
                 ? static_cast<std::uint8_t>(*pending_block_) : 7U) << 4U) |
         (state_.draw_index() & 0x0FU));
+    if (!compact_operations_eligible_) {
+        // Draw state can exceed the small packed field above. Keep the full
+        // seed and cursor so deterministic +2 continuations never alias.
+        mix(primary, verifier, 0xD100000000000000ULL);
+        mix(primary, verifier, state_.seed());
+        mix(primary, verifier, state_.draw_index());
+
+        // Effect and multi-suit cards are not rank interchangeable. Encode
+        // their exact identity and owner while ordinary ranks stay compressed.
+        for (int seat = 0; seat < 4; ++seat) {
+            std::vector<std::uint64_t> exact_cards;
+            for (const CardId id : state_.hand(static_cast<Seat>(seat))) {
+                const Card* card = state_.card(id);
+                if (card != nullptr && !is_compact_single_family(*card)) {
+                    exact_cards.push_back(id.value);
+                }
+            }
+            std::sort(exact_cards.begin(), exact_cards.end());
+            for (const std::uint64_t id : exact_cards) {
+                mix(
+                    primary, verifier,
+                    0xE100000000000000ULL |
+                        (static_cast<std::uint64_t>(seat) << 48U));
+                mix(primary, verifier, id);
+            }
+        }
+    }
     for (const TrickPlay& play : trick) {
         std::uint64_t token =
             (static_cast<std::uint64_t>(play.seat) << 56U) |
             (static_cast<std::uint64_t>(play.action.is_pass() ? 1U : 0U) << 55U);
         if (!play.action.is_pass()) {
             const Card* card = state_.card(*play.action.card_id());
-            if (card == nullptr || card->intrinsic_suits().size() != 1U) {
+            if (card == nullptr) {
                 return identity();
+            }
+            if (!is_plain_single_suit(*card)) {
+                token |= 0x0040000000000000ULL |
+                    (static_cast<std::uint64_t>(
+                        static_cast<std::uint8_t>(*play.action.mode())) << 28U) |
+                    (static_cast<std::uint64_t>(
+                        static_cast<std::uint8_t>(
+                            *play.action.effective_suit())) << 24U);
+                mix(primary, verifier, token);
+                mix(primary, verifier, play.action.card_id()->value);
+                continue;
             }
             const std::size_t suit = suit_index(card->intrinsic_suits().front());
             const std::optional<std::uint8_t> bit =

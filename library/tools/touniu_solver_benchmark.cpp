@@ -26,6 +26,7 @@ struct Args {
     bool narrow_equivalence = false;
     bool exact_key = false;
     bool verify_key = false;
+    std::uint32_t table_slots = 0;
 };
 
 auto parse_uint(const char* text, std::uint32_t& out) -> bool
@@ -71,6 +72,8 @@ auto parse_args(const int argc, char** argv) -> Args
             args.exact_key = true;
         } else if (flag == "--verify-key") {
             args.verify_key = true;
+        } else if (flag == "--tt-slots" && next(value)) {
+            args.table_slots = value;
         }
     }
     if (args.specials > 0) {
@@ -246,6 +249,7 @@ int main(int argc, char** argv)
                     SearchStats stats;
                     SearchOptions options{true, true, &stats};
                     options.use_wide_equivalence = !args.narrow_equivalence;
+                    options.table_slots_override = args.table_slots;
                     values_v2.push_back(
                         solve(*position, declarer_target(declarer), options).tricks);
                     sample_v2 += stats.nodes;
@@ -279,6 +283,7 @@ int main(int argc, char** argv)
                 SearchStats stats;
                 SearchOptions options{true, true, &stats};
                 options.use_wide_equivalence = !args.narrow_equivalence;
+                options.table_slots_override = args.table_slots;
                 const std::vector<int> values = solve_contract_batch(
                     queries, options);
                 sample_batch += stats.nodes;
@@ -384,6 +389,7 @@ int main(int argc, char** argv)
             SearchStats shared_stats;
             SearchOptions shared_options{true, true, &shared_stats};
             shared_options.use_wide_equivalence = !args.narrow_equivalence;
+            shared_options.table_slots_override = args.table_slots;
             const auto shared_start = std::chrono::steady_clock::now();
             const std::vector<ActionAnalysis> shared = analyze_actions(
                 *shared_position, Partnership::NorthSouth, shared_options);
@@ -427,6 +433,7 @@ int main(int argc, char** argv)
         SearchOptions options{true, true, &stats};
         options.use_wide_equivalence = !args.narrow_equivalence;
         options.use_shareable_identity = !args.exact_key;
+        options.table_slots_override = args.table_slots;
         const auto start = std::chrono::steady_clock::now();
         std::vector<ActionAnalysis> analyses;
         if (args.legacy) {
@@ -455,6 +462,7 @@ int main(int argc, char** argv)
         minimum_ms = std::min(minimum_ms, elapsed_ms);
         maximum_ms = std::max(maximum_ms, elapsed_ms);
         totals.nodes += stats.nodes;
+        totals.table_slots = std::max(totals.table_slots, stats.table_slots);
         totals.table_queries += stats.table_queries;
         totals.table_hits += stats.table_hits;
         totals.collision_rejections += stats.collision_rejections;
@@ -481,6 +489,7 @@ int main(int argc, char** argv)
     std::printf(
         "{\"cards\":%d,\"samples\":%d,\"seed\":%u,\"legacy\":%s,"
         "\"special\":%s,\"narrow_equivalence\":%s,"
+        "\"tt_slots\":%u,\"selected_tt_slots\":%llu,"
         "\"average_ms\":%.3f,\"min_ms\":%.3f,\"max_ms\":%.3f,"
         "\"nodes\":%llu,\"table_queries\":%llu,\"table_hits\":%llu,"
         "\"collision_rejections\":%llu,\"cutoffs\":%llu,"
@@ -500,6 +509,8 @@ int main(int argc, char** argv)
         args.legacy ? "true" : "false",
         args.special_deck ? "true" : "false",
         args.narrow_equivalence ? "true" : "false",
+        args.table_slots,
+        static_cast<unsigned long long>(totals.table_slots),
         average_ms,
         minimum_ms,
         maximum_ms,

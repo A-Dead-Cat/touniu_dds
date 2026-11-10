@@ -1,13 +1,27 @@
 #include "search.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
+#include <fstream>
 #include <limits>
+#include <new>
 #include <array>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#include <sys/sysinfo.h>
+#endif
 
 namespace touniu_solver {
 namespace {
@@ -117,6 +131,98 @@ auto analysis_transposition_slots(const Position& position) -> std::size_t
     // Hands can exceed 13 cards when +2 draws add cards to the deal.
     return 1U << 25U;
 }
+
+auto has_complex_specials(const Position& position) -> bool
+{
+    const auto complex = [](const CardKind kind) {
+        return kind == CardKind::FourSuit || kind == CardKind::Block ||
+               kind == CardKind::Reverse || kind == CardKind::PlusTwo ||
+               kind == CardKind::CherryBomb || kind == CardKind::ThreeSuitCat;
+    };
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* card = position.card(id);
+            if (card != nullptr && complex(card->kind())) {
+                return true;
+            }
+        }
+    }
+    for (const TrickPlay& play : position.current_trick()) {
+        if (!play.action.is_pass()) {
+            const Card* card = position.card(*play.action.card_id());
+            if (card != nullptr && complex(card->kind())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+#if defined(__linux__)
+auto read_memory_number(const char* path) -> std::optional<std::size_t>
+{
+    std::ifstream input(path);
+    std::string text;
+    if (!(input >> text) || text == "max") {
+        return std::nullopt;
+    }
+    char* end = nullptr;
+    const unsigned long long value = std::strtoull(text.c_str(), &end, 10);
+    if (end == text.c_str() || *end != '\0') {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(value);
+}
+#endif
+
+auto detected_available_memory() -> std::optional<std::size_t>
+{
+#if defined(_WIN32)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status) != 0) {
+        return static_cast<std::size_t>(status.ullAvailPhys);
+    }
+#elif defined(__linux__)
+    std::optional<std::size_t> available;
+    struct sysinfo info {};
+    if (::sysinfo(&info) == 0) {
+        available = static_cast<std::size_t>(info.freeram) * info.mem_unit;
+    }
+    const auto limit = read_memory_number("/sys/fs/cgroup/memory.max");
+    const auto current = read_memory_number("/sys/fs/cgroup/memory.current");
+    if (limit.has_value() && current.has_value() && *limit > *current) {
+        const std::size_t cgroup_available = *limit - *current;
+        available = available.has_value()
+            ? std::min(*available, cgroup_available)
+            : std::optional<std::size_t>{cgroup_available};
+    }
+    if (available.has_value()) {
+        return available;
+    }
+#endif
+    return std::nullopt;
+}
+
+std::atomic<std::size_t> active_analysis_count{0U};
+
+class ActiveAnalysis {
+public:
+    ActiveAnalysis()
+        : count_(active_analysis_count.fetch_add(1U, std::memory_order_relaxed) + 1U)
+    {
+    }
+
+    ~ActiveAnalysis()
+    {
+        active_analysis_count.fetch_sub(1U, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] auto count() const -> std::size_t { return count_; }
+
+private:
+    std::size_t count_ = 1U;
+};
 
 auto is_plain_card(const Card& card) -> bool
 {
@@ -265,6 +371,9 @@ public:
           main_variation_(buffer_count),
           killers_(buffer_count)
     {
+        if (options_.stats != nullptr) {
+            options_.stats->table_slots = table_slots;
+        }
     }
 
     // Canonical North-South result plus the action that achieves it.
@@ -929,7 +1038,9 @@ auto solve(Position& position, Partnership target, const SearchOptions& options)
     SearchContext context(
         options,
         static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
-        transposition_slots(position, ContractTableCapacity::Standard));
+        options.table_slots_override != 0U
+            ? options.table_slots_override
+            : transposition_slots(position, ContractTableCapacity::Standard));
     return context.solve_for(position, target);
 }
 
@@ -948,11 +1059,32 @@ auto analyze_actions(
     const SearchOptions& options)
     -> std::vector<ActionAnalysis>
 {
-    SearchContext context(
-        options,
-        static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
-        analysis_transposition_slots(position));
-    return context.analyze(position, target);
+    ActiveAnalysis active;
+    const std::size_t automatic_slots = analysis_transposition_slots(position);
+    std::size_t selected_slots = automatic_slots;
+    if (const auto available = detected_available_memory(); available.has_value()) {
+        selected_slots = analysis_table_slots_for_memory(
+            position, *available, active.count());
+    }
+    if (options.table_slots_override != 0U) {
+        selected_slots = options.table_slots_override;
+    }
+    const auto run = [&](const std::size_t slots) {
+        SearchContext context(
+            options,
+            static_cast<std::size_t>(position.tricks_remaining()) * 4U + 1U,
+            slots);
+        return context.analyze(position, target);
+    };
+    try {
+        return run(selected_slots);
+    } catch (const std::bad_alloc&) {
+        if (options.table_slots_override == 0U &&
+            selected_slots > automatic_slots) {
+            return run(automatic_slots);
+        }
+        throw;
+    }
 }
 
 auto contract_table_slots(
@@ -960,6 +1092,23 @@ auto contract_table_slots(
     const ContractTableCapacity capacity) -> std::size_t
 {
     return transposition_slots(position, capacity);
+}
+
+auto analysis_table_slots_for_memory(
+    const Position& position,
+    const std::size_t available_memory_bytes,
+    const std::size_t active_analyses) -> std::size_t
+{
+    const std::size_t baseline = analysis_transposition_slots(position);
+    if (baseline < (1U << 23U) || !has_complex_specials(position)) {
+        return baseline;
+    }
+    constexpr std::size_t safe_bytes_per_analysis =
+        (std::size_t{5} << 28U);  // 1.25 GiB for a 512 MiB table.
+    const std::size_t divisor = std::max<std::size_t>(active_analyses, 1U);
+    return available_memory_bytes / divisor >= safe_bytes_per_analysis
+        ? std::max<std::size_t>(baseline, 1U << 24U)
+        : baseline;
 }
 
 auto solve_contract_batch(
@@ -981,6 +1130,9 @@ auto solve_contract_batch(
             buffer_count, static_cast<std::size_t>(tricks) * 4U + 1U);
         table_slots = std::max(
             table_slots, transposition_slots(query.position, capacity));
+    }
+    if (options.table_slots_override != 0U) {
+        table_slots = options.table_slots_override;
     }
 
     // One shared table for every declarer of this deal and strain. Heuristics
