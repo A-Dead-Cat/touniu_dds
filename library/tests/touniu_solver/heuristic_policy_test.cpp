@@ -286,5 +286,97 @@ TEST(HeuristicPolicyTest, FloatingCardBreaksJackTenSequenceWhenItCannotBeDropped
     EXPECT_EQ(chosen.card_id(), CardId{72});
 }
 
+TEST(HeuristicPolicyTest, DiscardPreservesPartnershipSpadeWinnersAndThrowsAHeart)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::South;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 9;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(100, Suit::Spades, 13),
+        card(101, Suit::Spades, 9),
+        card(102, Suit::Spades, 8),
+        card(103, Suit::Hearts, 9),
+        card(104, Suit::Hearts, 8),
+        card(105, Suit::Hearts, 6),
+        card(106, Suit::Diamonds, 12),
+        card(107, Suit::Diamonds, 11),
+        card(108, Suit::Diamonds, 10),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(110, Suit::Hearts, 13),
+        card(111, Suit::Hearts, 5),
+        card(112, Suit::Hearts, 4),
+        card(113, Suit::Clubs, 5),
+        card(114, Suit::Clubs, 4),
+        card(115, Suit::Diamonds, 14),
+        card(116, Suit::Diamonds, 6),
+        card(117, Suit::Diamonds, 5),
+        card(118, Suit::Diamonds, 4),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(120, Suit::Spades, 5),
+        card(121, Suit::Hearts, 12),
+        card(122, Suit::Hearts, 11),
+        card(123, Suit::Hearts, 10),
+        card(124, Suit::Clubs, 9),
+        card(125, Suit::Clubs, 8),
+        card(126, Suit::Diamonds, 9),
+        card(127, Suit::Diamonds, 8),
+        card(128, Suit::Diamonds, 3),
+    };
+    const auto south_spade = Rank::floating(12'999'999);
+    ASSERT_TRUE(south_spade.has_value());
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        Card::floating(CardId{130}, Suit::Spades, *south_spade),
+        card(131, Suit::Hearts, 14),
+        card(132, Suit::Hearts, 7),
+        card(133, Suit::Hearts, 2),
+        card(134, Suit::Clubs, 14),
+        card(135, Suit::Clubs, 12),
+        card(136, Suit::Diamonds, 13),
+        card(137, Suit::Diamonds, 7),
+        card(138, Suit::Diamonds, 2),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{134}));
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{105});
+}
+
+TEST(HeuristicPolicyTest, DoesNotTrumpAnOpponentsWinningCherryBomb)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(200, Suit::Clubs, 5), card(201, Suit::Clubs, 4),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        Card::cherry_bomb(CardId{202}, Suit::Hearts),
+        card(203, Suit::Hearts, 3),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        Card::big_joker(CardId{204}),
+        card(205, Suit::Clubs, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(206, Suit::Diamonds, 5), card(207, Suit::Diamonds, 4),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{202}));
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{205});
+}
+
 }  // namespace
 }  // namespace touniu_solver

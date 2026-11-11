@@ -2199,11 +2199,14 @@ auto heuristic_action(
     std::array<int, 4> my_len{};
     std::array<long long, 4> my_best{};
     std::array<long long, 4> partner_best{};
+    std::array<long long, 4> side_best{};
     std::array<int, 4> their_run{};
+    std::array<int, 4> legacy_their_run{};
     {
         their_best.fill(-1);
         my_best.fill(-1);
         partner_best.fill(-1);
+        side_best.fill(-1);
         for (int seat = 0; seat < 4; ++seat) {
             const Seat who = static_cast<Seat>(seat);
             for (const CardId id : position.hand(who)) {
@@ -2228,7 +2231,9 @@ auto heuristic_action(
         }
         // Cards they cash before my stopper bites in that suit.
         for (int suit = 0; suit < 4; ++suit) {
+            side_best[suit] = std::max(my_best[suit], partner_best[suit]);
             int run = 0;
+            int legacy_run = 0;
             for (int seat = 0; seat < 4; ++seat) {
                 const Seat who = static_cast<Seat>(seat);
                 if (who == me || who == partner) continue;
@@ -2239,10 +2244,13 @@ auto heuristic_action(
                         continue;
                     }
                     if (suit_code(*card) != suit) continue;
-                    if (effective_rank_micro(position, card) > my_best[suit]) ++run;
+                    const long long rank = effective_rank_micro(position, card);
+                    if (rank > side_best[suit]) ++run;
+                    if (rank > my_best[suit]) ++legacy_run;
                 }
             }
             their_run[suit] = run;
+            legacy_their_run[suit] = legacy_run;
         }
     }
     // A sure trick of my own is an entry: without one I can never get the lead
@@ -2257,7 +2265,26 @@ auto heuristic_action(
         if (suit < 0) return 1e9;
         const long long rank = effective_rank_micro(position, card);
         double cost = static_cast<double>(rank) / 1'000'000.0;
-        const bool stopper = their_run[suit] >= 1 && my_len[suit] > their_run[suit];
+        if (std::getenv("TUONIU_DISCARD_PARTNERSHIP_OFF") != nullptr) {
+            const bool legacy_stopper = legacy_their_run[suit] >= 1 &&
+                my_len[suit] > legacy_their_run[suit];
+            if (their_count[suit] > 0 && rank > their_best[suit]) {
+                cost += 10.0;
+            } else if (legacy_stopper &&
+                       my_len[suit] == legacy_their_run[suit] + 1) {
+                cost += 11.0;
+            } else if (legacy_stopper && rank == my_best[suit]) {
+                cost += 12.0;
+            }
+            if (my_len[suit] == 1 && partner_best[suit] > their_best[suit] &&
+                i_have_entry) {
+                cost += 6.0;
+            }
+            return cost;
+        }
+        const bool i_hold_side_stopper = my_best[suit] > partner_best[suit];
+        const bool stopper = i_hold_side_stopper && their_run[suit] >= 1 &&
+            my_len[suit] > their_run[suit];
         if (their_count[suit] > 0 && rank > their_best[suit]) {
             // My own trick: nothing they hold in the suit beats it.
             cost += 10.0;
@@ -2351,6 +2378,38 @@ auto heuristic_action(
         std::getenv("TUONIU_DISCARD_FORCE") == nullptr;
     const Action* throw_away = (void_in_led && !special_blocked &&
         std::getenv("TUONIU_DISCARD_OFF") == nullptr) ? dullest : lowest;
+
+    // A winning bomb played by the opponents already redirects the trick to
+    // our side. Do not trump it or spend a rank above it: that would suppress
+    // the redirect and turn a donated trick back into an ordinary contest.
+    if (winning_card != nullptr && is_bomb(winning_card) &&
+        leader.play != nullptr &&
+        partnership_of(leader.play->seat) != partnership_of(me) &&
+        partnership_of(leader.seat) == partnership_of(me) &&
+        std::getenv("TUONIU_OPPONENT_BOMB_DUCK_OFF") == nullptr) {
+        const bool bomb_is_trump = acts_as_trump(position, *winning_card);
+        const Action* preserve_redirect = nullptr;
+        const Card* preserve_card = nullptr;
+        for (const Action& action : legal) {
+            const Card* card = card_for(action);
+            if (card == nullptr || is_bomb(card)) continue;
+            const bool card_is_trump = acts_as_trump(position, *card);
+            const bool overtakes =
+                (card_is_trump && !bomb_is_trump) ||
+                (card_is_trump == bomb_is_trump &&
+                 action.mode() != PlayMode::Discard &&
+                 effective_rank_micro(position, card) >
+                     effective_rank_micro(position, winning_card));
+            if (overtakes) continue;
+            if (preserve_card == nullptr ||
+                effective_rank_micro(position, card) <
+                    effective_rank_micro(position, preserve_card)) {
+                preserve_card = card;
+                preserve_redirect = &action;
+            }
+        }
+        if (preserve_redirect != nullptr) return *preserve_redirect;
+    }
 
     // ---- partnership follow rules ----
     // The led suit, who led, and how far the trick has got.
@@ -2572,7 +2631,22 @@ struct Diagnose {
     std::array<std::uint64_t, 3> decisions{};
     std::array<std::uint64_t, 3> regret{};
     std::array<std::uint64_t, 3> mistakes{};
+    std::uint64_t discard_decisions = 0;
+    std::uint64_t discard_regret = 0;
+    std::uint64_t discard_mistakes = 0;
 };
+
+auto is_discard_decision(const Position& position) -> bool
+{
+    if (position.current_trick().empty()) return false;
+    bool has_discard = false;
+    for (const Action& action : position.legal_actions()) {
+        if (action.is_pass()) continue;
+        if (action.mode() == PlayMode::Follow) return false;
+        if (action.mode() == PlayMode::Discard) has_discard = true;
+    }
+    return has_discard;
+}
 
 auto category_of(const Position& position) -> int
 {
@@ -2892,6 +2966,7 @@ auto main(const int argc, char** argv) -> int
                 }
 if (args.diagnose) {
                     const int category = category_of(*position);
+                    const bool discard_decision = is_discard_decision(*position);
                     // Both values are the final EW trick count from this point.
                     const int best = solve(*position, Partnership::EastWest, true).tricks;
                     int chosen = best;
@@ -2995,6 +3070,12 @@ if (args.diagnose) {
                     if (best > chosen) {
                         diagnose.mistakes[static_cast<std::size_t>(category)] += 1;
                     }
+                    if (discard_decision) {
+                        diagnose.discard_decisions += 1;
+                        diagnose.discard_regret +=
+                            static_cast<std::uint64_t>(std::max(0, best - chosen));
+                        if (best > chosen) diagnose.discard_mistakes += 1;
+                    }
                 }
             } else if (!action.has_value()) {
                 const SearchResult result =
@@ -3034,7 +3115,8 @@ if (args.diagnose) {
                 "\"fourEw\":%d,\"fourNs\":%d,"
                 "\"leadDecisions\":%llu,\"leadRegret\":%llu,"
                 "\"partnerDecisions\":%llu,\"partnerRegret\":%llu,"
-                "\"opponentDecisions\":%llu,\"opponentRegret\":%llu}\n",
+                "\"opponentDecisions\":%llu,\"opponentRegret\":%llu,"
+                "\"discardDecisions\":%llu,\"discardRegret\":%llu}\n",
                 loss, dd_value, actual, static_cast<int>(scenario.contract),
                 bombs_ew, bombs_ns, free_ew, free_ns, cats_ew, cats_ns,
                 jokers_ew, jokers_ns, nt_ew, nt_ns,
@@ -3044,7 +3126,9 @@ if (args.diagnose) {
                 diagnose.decisions[1] - diagnose_before.decisions[1],
                 diagnose.regret[1] - diagnose_before.regret[1],
                 diagnose.decisions[2] - diagnose_before.decisions[2],
-                diagnose.regret[2] - diagnose_before.regret[2]);
+                diagnose.regret[2] - diagnose_before.regret[2],
+                diagnose.discard_decisions - diagnose_before.discard_decisions,
+                diagnose.discard_regret - diagnose_before.discard_regret);
         }
         if (args.verbose) {
             std::printf(
@@ -3076,6 +3160,14 @@ if (args.diagnose) {
                 decisions == 0 ? 0.0
                                : static_cast<double>(diagnose.regret[index]) / decisions);
         }
+        std::printf(
+            "  %-16s decisions %4llu  mistakes %4llu  regret %6.3f/decision\n",
+            "discard",
+            static_cast<unsigned long long>(diagnose.discard_decisions),
+            static_cast<unsigned long long>(diagnose.discard_mistakes),
+            diagnose.discard_decisions == 0 ? 0.0
+                : static_cast<double>(diagnose.discard_regret) /
+                    diagnose.discard_decisions);
     }
     return 0;
 }
