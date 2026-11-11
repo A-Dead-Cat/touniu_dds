@@ -412,5 +412,142 @@ TEST(HeuristicPolicyTest, DiscardsAnUnreachableTopInsteadOfAWorkingStopper)
     EXPECT_EQ(chosen.card_id(), CardId{220});
 }
 
+TEST(HeuristicPolicyTest, EastDoesNotOpenTheHalfFrozenClubSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::East;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 11;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(240, Suit::Spades, 11), card(241, Suit::Spades, 9),
+        card(242, Suit::Spades, 5), card(243, Suit::Spades, 3),
+        card(244, Suit::Hearts, 8), card(245, Suit::Hearts, 7),
+        card(246, Suit::Clubs, 9), card(247, Suit::Clubs, 6),
+        card(248, Suit::Diamonds, 12), card(249, Suit::Diamonds, 8),
+        card(250, Suit::Diamonds, 7),
+    };
+    const auto north_spade = Rank::floating(10'142'857);
+    const auto north_club = Rank::floating(10'571'428);
+    ASSERT_TRUE(north_spade.has_value());
+    ASSERT_TRUE(north_club.has_value());
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        Card::floating(CardId{251}, Suit::Spades, *north_spade),
+        card(252, Suit::Hearts, 14), card(253, Suit::Hearts, 11),
+        card(254, Suit::Hearts, 10), card(255, Suit::Hearts, 9),
+        card(256, Suit::Hearts, 6), card(257, Suit::Hearts, 3),
+        card(258, Suit::Clubs, 12),
+        Card::floating(CardId{259}, Suit::Clubs, *north_club),
+        card(260, Suit::Clubs, 3), card(261, Suit::Diamonds, 6),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(262, Suit::Spades, 10), card(263, Suit::Spades, 7),
+        card(264, Suit::Spades, 4), card(265, Suit::Spades, 2),
+        card(266, Suit::Hearts, 4), card(267, Suit::Clubs, 11),
+        card(268, Suit::Clubs, 8), card(269, Suit::Diamonds, 10),
+        card(270, Suit::Diamonds, 9), card(271, Suit::Diamonds, 5),
+        card(272, Suit::Diamonds, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(273, Suit::Spades, 14), card(274, Suit::Spades, 12),
+        card(275, Suit::Spades, 8), card(276, Suit::Spades, 6),
+        card(277, Suit::Clubs, 7), card(278, Suit::Clubs, 4),
+        card(279, Suit::Diamonds, 14), card(280, Suit::Diamonds, 13),
+        card(281, Suit::Diamonds, 11), card(282, Suit::Diamonds, 4),
+        card(283, Suit::Diamonds, 3),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+
+    const Action chosen = heuristic_choose(*position, 3);
+    ASSERT_TRUE(chosen.card_id().has_value());
+    const Card* chosen_card = position->card(*chosen.card_id());
+    ASSERT_NE(chosen_card, nullptr);
+    ASSERT_EQ(chosen_card->intrinsic_suits().size(), 1U);
+    EXPECT_NE(chosen_card->intrinsic_suits().front(), Suit::Clubs);
+
+    scenario.next_player = Seat::West;
+    auto west_position = Position::create(scenario);
+    ASSERT_TRUE(west_position.has_value());
+    const Action west_choice = heuristic_choose(*west_position, 3);
+    ASSERT_TRUE(west_choice.card_id().has_value());
+    const Card* west_card = west_position->card(*west_choice.card_id());
+    ASSERT_NE(west_card, nullptr);
+    ASSERT_EQ(west_card->intrinsic_suits().size(), 1U);
+    EXPECT_EQ(west_card->intrinsic_suits().front(), Suit::Clubs);
+}
+
+TEST(HeuristicPolicyTest, HalfFrozenLeadMayEstablishLongSuitWithoutPartnerEntry)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 4;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(300, Suit::Spades, 9), card(301, Suit::Spades, 4),
+        card(302, Suit::Hearts, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(303, Suit::Spades, 8), card(304, Suit::Spades, 7),
+        card(305, Suit::Spades, 6), card(306, Suit::Hearts, 14),
+        card(307, Suit::Hearts, 12), card(308, Suit::Hearts, 10),
+        card(309, Suit::Hearts, 8),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(310, Suit::Spades, 10), card(311, Suit::Spades, 5),
+        card(312, Suit::Spades, 2), card(313, Suit::Hearts, 3),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(314, Suit::Spades, 11), card(315, Suit::Spades, 3),
+        card(316, Suit::Hearts, 13), card(317, Suit::Hearts, 11),
+        card(318, Suit::Hearts, 9), card(319, Suit::Hearts, 6),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    const Action chosen = heuristic_choose(*position, 3);
+    ASSERT_TRUE(chosen.card_id().has_value());
+    const Card* chosen_card = position->card(*chosen.card_id());
+    ASSERT_NE(chosen_card, nullptr);
+    ASSERT_EQ(chosen_card->intrinsic_suits().size(), 1U);
+    EXPECT_EQ(chosen_card->intrinsic_suits().front(), Suit::Spades);
+}
+
+TEST(HeuristicPolicyTest, FrozenLeadMayEstablishLongSuit)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 4;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(340, Suit::Spades, 9), card(341, Suit::Spades, 7),
+        card(342, Suit::Spades, 3), card(343, Suit::Hearts, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(344, Suit::Spades, 8), card(345, Suit::Spades, 5),
+        card(346, Suit::Spades, 4), card(347, Suit::Hearts, 14),
+        card(354, Suit::Hearts, 12), card(355, Suit::Hearts, 10),
+        card(356, Suit::Hearts, 8),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(348, Suit::Spades, 10), card(349, Suit::Spades, 2),
+        card(350, Suit::Hearts, 3),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(351, Suit::Spades, 11), card(352, Suit::Spades, 6),
+        card(353, Suit::Hearts, 13), card(357, Suit::Hearts, 11),
+        card(358, Suit::Hearts, 9), card(359, Suit::Hearts, 6),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    const Action chosen = heuristic_choose(*position, 3);
+    ASSERT_TRUE(chosen.card_id().has_value());
+    const Card* chosen_card = position->card(*chosen.card_id());
+    ASSERT_NE(chosen_card, nullptr);
+    ASSERT_EQ(chosen_card->intrinsic_suits().size(), 1U);
+    EXPECT_EQ(chosen_card->intrinsic_suits().front(), Suit::Spades);
+}
+
 }  // namespace
 }  // namespace touniu_solver

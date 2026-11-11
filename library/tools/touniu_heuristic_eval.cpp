@@ -975,6 +975,34 @@ auto full_info_lead(
     double best_score = -1e9;
     const Card* best_card = nullptr;
     bool best_drops_singleton = false;
+    std::array<bool, 4> freeze_eligible{true, true, true, true};
+    for (int seat = 0; seat < 4; ++seat) {
+        for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+            const Card* held = position.card(id);
+            if (held == nullptr || held->intrinsic_suits().size() != 1U) continue;
+            const int held_suit = static_cast<int>(held->intrinsic_suits().front());
+            if (held_suit < 0 || held_suit >= 4) continue;
+            if (held->kind() != CardKind::Normal &&
+                held->kind() != CardKind::Floating) {
+                freeze_eligible[static_cast<std::size_t>(held_suit)] = false;
+            }
+        }
+    }
+    std::array<std::array<int, 4>, 4> suit_dd_by_leader{};
+    std::array<bool, 4> suit_dd_ready{};
+    const auto directional_suit_values = [&](const int suit)
+        -> const std::array<int, 4>& {
+        if (!suit_dd_ready[static_cast<std::size_t>(suit)]) {
+            for (int leader = 0; leader < 4; ++leader) {
+                const Seat seat = static_cast<Seat>(leader);
+                suit_dd_by_leader[static_cast<std::size_t>(suit)]
+                    [static_cast<std::size_t>(leader)] =
+                    suit_dd(position, suit, seat, seat, 0);
+            }
+            suit_dd_ready[static_cast<std::size_t>(suit)] = true;
+        }
+        return suit_dd_by_leader[static_cast<std::size_t>(suit)];
+    };
     for (const Action& action : legal) {
         if (action.is_pass() || !action.card_id().has_value()) continue;
         const Card* card = position.card(*action.card_id());
@@ -988,6 +1016,38 @@ auto full_info_lead(
             if (suit >= 4U) continue;
         }
         double score = 0.0;
+        if (suit < 4U && freeze_eligible[suit] &&
+            std::getenv("TUONIU_FROZEN_LEAD_OFF") == nullptr) {
+            const auto& directional = directional_suit_values(
+                static_cast<int>(suit));
+            const int mine = directional[static_cast<std::size_t>(me)];
+            const int partners = directional[static_cast<std::size_t>(partner)];
+            const int ns_baseline = std::min(
+                directional[static_cast<std::size_t>(Seat::North)],
+                directional[static_cast<std::size_t>(Seat::South)]);
+            const bool my_lead_is_harmful = mine < ns_baseline;
+            const bool partners_lead_is_harmful = partners < ns_baseline;
+            const int current_quick = suit_quick(
+                position, static_cast<int>(suit), me, side);
+            // Establishing means this lead is not cashing now, but creates
+            // tricks that our side can take after losing and regaining lead.
+            const bool establishes_long_suit = mine > current_quick;
+            const bool partner_has_entry = has_spare_entry(
+                position, partner, me, static_cast<int>(suit));
+            const bool frozen = my_lead_is_harmful && partners_lead_is_harmful;
+            const bool half_frozen = my_lead_is_harmful &&
+                !partners_lead_is_harmful;
+            const bool establishment_exception =
+                std::getenv("TUONIU_FROZEN_ESTABLISHMENT_OFF") == nullptr &&
+                ((frozen && establishes_long_suit) ||
+                 (half_frozen && establishes_long_suit && !partner_has_entry));
+            if (my_lead_is_harmful && !establishment_exception) {
+                // Keep the lead legal as a last resort, but make every safe
+                // suit preferable. The extra term orders multiple forced
+                // choices by how many tricks they donate.
+                score -= 100.0 + 10.0 * static_cast<double>(ns_baseline - mine);
+            }
+        }
         // A cat behind one of our runs absorbs a round, so opening the suit
         // from the long hand only wins the covered part; the short hand has to
         // lead it through the opponent later.
