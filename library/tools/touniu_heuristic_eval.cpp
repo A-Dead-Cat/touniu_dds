@@ -2285,8 +2285,16 @@ auto heuristic_action(
         const bool i_hold_side_stopper = my_best[suit] > partner_best[suit];
         const bool stopper = i_hold_side_stopper && their_run[suit] >= 1 &&
             my_len[suit] > their_run[suit];
+        const bool self_contained_length_winner = i_hold_side_stopper &&
+            my_best[suit] > their_best[suit] && my_len[suit] > their_count[suit] &&
+            rank < my_best[suit];
         if (their_count[suit] > 0 && rank > their_best[suit]) {
             // My own trick: nothing they hold in the suit beats it.
+            cost += 10.0;
+        } else if (self_contained_length_winner) {
+            // I hold both the partnership's top card and enough length to
+            // exhaust every opposing card without needing an entry to the
+            // partner. The remaining small cards are established winners too.
             cost += 10.0;
         } else if (stopper && my_len[suit] == their_run[suit] + 1) {
             // The last small card holding the stopper up.

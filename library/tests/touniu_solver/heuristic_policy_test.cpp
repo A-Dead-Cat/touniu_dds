@@ -286,7 +286,7 @@ TEST(HeuristicPolicyTest, FloatingCardBreaksJackTenSequenceWhenItCannotBeDropped
     EXPECT_EQ(chosen.card_id(), CardId{72});
 }
 
-TEST(HeuristicPolicyTest, DiscardPreservesPartnershipSpadeWinnersAndThrowsAHeart)
+TEST(HeuristicPolicyTest, ConsecutiveDiscardsPreserveEstablishedPartnershipSpades)
 {
     Scenario scenario;
     scenario.next_player = Seat::South;
@@ -341,11 +341,17 @@ TEST(HeuristicPolicyTest, DiscardPreservesPartnershipSpadeWinnersAndThrowsAHeart
 
     auto position = Position::create(scenario);
     ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{135}));
+
+    const Action first = heuristic_choose(*position, 3);
+    EXPECT_EQ(first.card_id(), CardId{105});
+    ASSERT_TRUE(position->apply(first));
+    ASSERT_TRUE(play_card(*position, CardId{113}));
+    ASSERT_TRUE(play_card(*position, CardId{125}));
     ASSERT_TRUE(play_card(*position, CardId{134}));
 
-    const Action chosen = heuristic_choose(*position, 3);
-
-    EXPECT_EQ(chosen.card_id(), CardId{105});
+    const Action second = heuristic_choose(*position, 3);
+    EXPECT_EQ(second.card_id(), CardId{104});
 }
 
 TEST(HeuristicPolicyTest, DoesNotTrumpAnOpponentsWinningCherryBomb)
@@ -376,6 +382,34 @@ TEST(HeuristicPolicyTest, DoesNotTrumpAnOpponentsWinningCherryBomb)
     const Action chosen = heuristic_choose(*position, 3);
 
     EXPECT_EQ(chosen.card_id(), CardId{205});
+}
+
+TEST(HeuristicPolicyTest, DiscardsAnUnreachableTopInsteadOfAWorkingStopper)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::South;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(220, Suit::Hearts, 14), card(221, Suit::Diamonds, 12),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(222, Suit::Spades, 9), card(223, Suit::Diamonds, 3),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(224, Suit::Spades, 7), card(225, Suit::Clubs, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(226, Suit::Spades, 14), card(227, Suit::Diamonds, 11),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{226}));
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{220});
 }
 
 }  // namespace
