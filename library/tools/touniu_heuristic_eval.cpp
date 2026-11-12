@@ -2582,6 +2582,41 @@ auto heuristic_action(
                 card_rank_micro(forcing_cover_card) < 9'000'000) {
                 forcing_cover = nullptr;
             }
+            // Spending an honour is useful only when it makes fourth hand use
+            // a strictly higher winner. If partner's current card and our
+            // proposed cover both force the same card, keep the cover.
+            if (forcing_cover != nullptr) {
+                const long long forcing_rank =
+                    effective_rank_micro(position, forcing_cover_card);
+                std::optional<long long> response_to_partner;
+                std::optional<long long> response_to_cover;
+                for (int seat = 0; seat < 4; ++seat) {
+                    if (!behind[static_cast<std::size_t>(seat)] ||
+                        static_cast<Seat>(seat) == partner) {
+                        continue;
+                    }
+                    for (const CardId id : position.hand(static_cast<Seat>(seat))) {
+                        const Card* held = position.card(id);
+                        if (held == nullptr || !in_suit(*held, led_suit)) continue;
+                        const long long rank = effective_rank_micro(position, held);
+                        if (rank > top_now &&
+                            (!response_to_partner.has_value() ||
+                             rank < *response_to_partner)) {
+                            response_to_partner = rank;
+                        }
+                        if (rank > forcing_rank &&
+                            (!response_to_cover.has_value() ||
+                             rank < *response_to_cover)) {
+                            response_to_cover = rank;
+                        }
+                    }
+                }
+                if (!response_to_partner.has_value() ||
+                    !response_to_cover.has_value() ||
+                    *response_to_cover <= *response_to_partner) {
+                    forcing_cover = nullptr;
+                }
+            }
             // Do not spend the only cover for a card retained by an opponent
             // who has already played to this trick. Forcing the fourth hand's
             // higher card would promote that cross-hand intermediate control.
