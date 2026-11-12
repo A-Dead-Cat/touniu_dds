@@ -2583,8 +2583,9 @@ auto heuristic_action(
                 forcing_cover = nullptr;
             }
             // Spending an honour is useful only when it makes fourth hand use
-            // a strictly higher winner. If partner's current card and our
-            // proposed cover both force the same card, keep the cover.
+            // a materially higher winner. For example, changing J into K by
+            // playing our Q merely trades the two adjacent honours and leaves
+            // the J established, so it gains nothing.
             if (forcing_cover != nullptr) {
                 const long long forcing_rank =
                     effective_rank_micro(position, forcing_cover_card);
@@ -2611,9 +2612,16 @@ auto heuristic_action(
                         }
                     }
                 }
+                constexpr long long AdjacentCoverExchange = 2'000'000;
+                const bool only_trades_adjacent_honors =
+                    response_to_partner.has_value() &&
+                    response_to_cover.has_value() &&
+                    *response_to_cover - *response_to_partner <=
+                        AdjacentCoverExchange;
                 if (!response_to_partner.has_value() ||
                     !response_to_cover.has_value() ||
-                    *response_to_cover <= *response_to_partner) {
+                    *response_to_cover <= *response_to_partner ||
+                    only_trades_adjacent_honors) {
                     forcing_cover = nullptr;
                 }
             }

@@ -213,6 +213,44 @@ TEST(HeuristicPolicyTest, ThirdHandKeepsJackWhenItForcesTheSameAceAsPartnersTen)
     EXPECT_EQ(chosen.card_id(), CardId{406});
 }
 
+TEST(HeuristicPolicyTest, ThirdHandKeepsQueenWhenItOnlyTradesJackForKing)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 3;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(420, Suit::Spades, 10),
+        card(421, Suit::Spades, 9),
+        card(422, Suit::Spades, 3),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(423, Suit::Spades, 5),
+        card(424, Suit::Spades, 4),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(425, Suit::Spades, 12),
+        card(426, Suit::Spades, 8),
+        card(427, Suit::Spades, 7),
+        card(428, Suit::Spades, 6),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(429, Suit::Spades, 14),
+        card(430, Suit::Spades, 13),
+        card(431, Suit::Spades, 11),
+        card(432, Suit::Spades, 2),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{420}));
+    ASSERT_TRUE(play_card(*position, CardId{424}));
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{428});
+}
+
 TEST(HeuristicPolicyTest, FullInformationLeadUsesJackToDropSingletonFloatingTen)
 {
     Scenario scenario;
