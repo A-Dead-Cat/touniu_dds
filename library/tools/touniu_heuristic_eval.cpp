@@ -426,8 +426,11 @@ auto acts_as_trump(const Position& position, const Card& card) -> bool
         != card.intrinsic_suits().end();
 }
 
-auto beats(const Card& candidate, const Card& best) -> bool
+auto beats(const Position& position, const Card& candidate, const Card& best) -> bool
 {
+    const bool candidate_is_trump = acts_as_trump(position, candidate);
+    const bool best_is_trump = acts_as_trump(position, best);
+    if (candidate_is_trump != best_is_trump) return candidate_is_trump;
     return candidate.rank() > best.rank();
 }
 
@@ -2420,7 +2423,7 @@ auto heuristic_action(
             !acts_as_trump(position, *card)) {
             continue;
         }
-        if (winning_card == nullptr || !beats(*card, *winning_card)) continue;
+        if (winning_card == nullptr || !beats(position, *card, *winning_card)) continue;
         // A bomb that "wins" hands the trick to the seat after the thrower, and
         // that seat is always an opponent because partnerships sit opposite, so
         // a bomb is never a card to win with. A +2 hands the next seat two

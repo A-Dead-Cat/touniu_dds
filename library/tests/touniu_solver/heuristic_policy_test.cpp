@@ -291,6 +291,40 @@ TEST(HeuristicPolicyTest, ThirdHandCoversOpponentsWinnerToForceFourthHandsAce)
     EXPECT_EQ(chosen.card_id(), CardId{447});
 }
 
+TEST(HeuristicPolicyTest, SecondHandRuffsWithNoTrumpWhenPartnerCannotStopTheTrick)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::North;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 2;
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        card(460, Suit::Hearts, 10),
+        card(461, Suit::Clubs, 13),
+    };
+    const auto no_trump_rank = Rank::floating(2'040'000);
+    ASSERT_TRUE(no_trump_rank.has_value());
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        Card::no_trump(CardId{462}, *no_trump_rank),
+        card(463, Suit::Spades, 10),
+        card(464, Suit::Diamonds, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(465, Suit::Diamonds, 14),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(466, Suit::Hearts, 8),
+        card(467, Suit::Clubs, 9),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{460}));
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{462});
+}
+
 TEST(HeuristicPolicyTest, FullInformationLeadUsesJackToDropSingletonFloatingTen)
 {
     Scenario scenario;
