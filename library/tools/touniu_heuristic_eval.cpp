@@ -2582,11 +2582,11 @@ auto heuristic_action(
                 card_rank_micro(forcing_cover_card) < 9'000'000) {
                 forcing_cover = nullptr;
             }
-            // Spending an honour is useful only when it makes fourth hand use
-            // a materially higher winner. For example, changing J into K by
-            // playing our Q merely trades the two adjacent honours and leaves
-            // the J established, so it gains nothing.
-            if (forcing_cover != nullptr) {
+            // When partner is already winning, spending an honour is useful
+            // only when it makes fourth hand use a materially higher winner.
+            // If second hand is winning, however, covering can force fourth
+            // hand to spend a control that it could otherwise keep.
+            if (forcing_cover != nullptr && partner_winning) {
                 const long long forcing_rank =
                     effective_rank_micro(position, forcing_cover_card);
                 std::optional<long long> response_to_partner;

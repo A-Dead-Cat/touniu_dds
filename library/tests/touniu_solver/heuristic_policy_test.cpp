@@ -251,6 +251,46 @@ TEST(HeuristicPolicyTest, ThirdHandKeepsQueenWhenItOnlyTradesJackForKing)
     EXPECT_EQ(chosen.card_id(), CardId{428});
 }
 
+TEST(HeuristicPolicyTest, ThirdHandCoversOpponentsWinnerToForceFourthHandsAce)
+{
+    Scenario scenario;
+    scenario.next_player = Seat::West;
+    scenario.contract = Contract::NoTrump;
+    scenario.tricks_remaining = 3;
+    scenario.hands[static_cast<std::size_t>(Seat::West)] = {
+        card(440, Suit::Clubs, 10),
+        card(441, Suit::Clubs, 9),
+        card(442, Suit::Clubs, 6),
+    };
+    const auto intermediate = Rank::floating(10'571'428);
+    ASSERT_TRUE(intermediate.has_value());
+    scenario.hands[static_cast<std::size_t>(Seat::North)] = {
+        Card::floating(CardId{443}, Suit::Clubs, *intermediate),
+        card(444, Suit::Clubs, 12),
+        card(445, Suit::Clubs, 3),
+        card(446, Suit::Clubs, 2),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::East)] = {
+        card(447, Suit::Clubs, 11),
+        card(448, Suit::Clubs, 8),
+        card(449, Suit::Clubs, 5),
+    };
+    scenario.hands[static_cast<std::size_t>(Seat::South)] = {
+        card(450, Suit::Clubs, 14),
+        card(451, Suit::Clubs, 7),
+        card(452, Suit::Clubs, 4),
+    };
+
+    auto position = Position::create(scenario);
+    ASSERT_TRUE(position.has_value());
+    ASSERT_TRUE(play_card(*position, CardId{440}));
+    ASSERT_TRUE(play_card(*position, CardId{443}));
+
+    const Action chosen = heuristic_choose(*position, 3);
+
+    EXPECT_EQ(chosen.card_id(), CardId{447});
+}
+
 TEST(HeuristicPolicyTest, FullInformationLeadUsesJackToDropSingletonFloatingTen)
 {
     Scenario scenario;
