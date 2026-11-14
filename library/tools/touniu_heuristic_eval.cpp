@@ -2691,6 +2691,46 @@ auto heuristic_action(
             const bool honour = card_rank_micro(led_card) >= 10'000'000;
             const bool from_sequence = led_card != nullptr &&
                 leader_holds_touching_lower(position, leader_seat, *led_card, led_suit);
+            // Ruff now when partner, who plays fourth, cannot stop the current
+            // winner. Ordinary second-hand-low logic must not turn a certain
+            // defensive trick into a discard merely because the lead is low.
+            const bool ruff_winner = cheapest_winner_card != nullptr &&
+                winning_card != nullptr &&
+                acts_as_trump(position, *cheapest_winner_card) &&
+                !acts_as_trump(position, *winning_card);
+            if (ruff_winner) {
+                const Card* partner_stop_card = nullptr;
+                bool partner_holds_led_suit = false;
+                for (const CardId id : position.hand(partner)) {
+                    const Card* card = position.card(id);
+                    if (card == nullptr || !in_suit(*card, led_suit)) continue;
+                    partner_holds_led_suit = true;
+                    if (!is_bomb(card) &&
+                        (partner_stop_card == nullptr ||
+                         effective_rank_micro(position, card) >
+                             effective_rank_micro(position, partner_stop_card))) {
+                        partner_stop_card = card;
+                    }
+                }
+                if (!partner_holds_led_suit) {
+                    for (const CardId id : position.hand(partner)) {
+                        const Card* card = position.card(id);
+                        if (card == nullptr || is_bomb(card) ||
+                            !acts_as_trump(position, *card)) {
+                            continue;
+                        }
+                        if (partner_stop_card == nullptr ||
+                            effective_rank_micro(position, card) >
+                                effective_rank_micro(position, partner_stop_card)) {
+                            partner_stop_card = card;
+                        }
+                    }
+                }
+                if (partner_stop_card == nullptr ||
+                    !beats(position, *partner_stop_card, *winning_card)) {
+                    return *cheapest_winner;
+                }
+            }
             // Covering a low card is right when a higher card of ours stays
             // behind the cover: the fourth hand must then spend an honour, and
             // we still control the suit.
